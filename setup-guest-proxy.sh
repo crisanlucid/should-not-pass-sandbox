@@ -9,8 +9,9 @@ S() { sudo "$@"; }
 T=$(mktemp -d)
 
 # system-wide env (login sessions, services reading /etc/environment)
-grep -viE '^(http|https|no)_proxy=' /etc/environment > $T/env || true
+grep -viE '^((http|https|no)_proxy|NODE_USE_ENV_PROXY)=' /etc/environment > $T/env || true
 cat >> $T/env <<E
+NODE_USE_ENV_PROXY=1
 http_proxy=$P
 https_proxy=$P
 HTTP_PROXY=$P

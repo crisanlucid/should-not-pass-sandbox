@@ -23,4 +23,6 @@ sudo usermod -aG docker "$USER"
 curl -fsSL https://claude.ai/install.sh | bash
 grep -q '.local/bin' ~/.bashrc || echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
 
-node -v; python3 --version; google-chrome --version; snap list insomnia; "$HOME/.local/bin/claude" --version
+# Version list: `vm-versions` any time, and printed when an interactive shell starts (terminal or ssh)
+sudo install -m 755 "$(dirname "$0")/report-installed.sh" /usr/local/bin/vm-versions
+grep -q vm-versions /etc/bash.bashrc || echo '[ -n "$PS1" ] && [ -z "$VM_VERSIONS_SHOWN" ] && export VM_VERSIONS_SHOWN=1 && vm-versions' | sudo tee -a /etc/bash.bashrc >/dev/null

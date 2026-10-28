@@ -19,4 +19,4 @@ ShouldNotPass exists to contain hostile code, so reports of a way out are the mo
 Use GitHub's private reporting: the repository's **Security** tab, then **Report a vulnerability**. Please do not open a public issue for an escape that still works. Include the steps, the VM name or `setup` options used, and the output of `python3 snp.py status`. Expect a first answer within a week; this is a personal project.
 
 ## How to test safely
-Test on your own machine. Use throwaway credentials only: never a real token, SSH key or password inside the VM. The attack suite in `attack-suite/` is a harmless starting point.
+Test on your own machine. Use throwaway credentials only: never a real token, SSH key or password inside the VM. The attack suite (`probe.py`) is a harmless starting point.

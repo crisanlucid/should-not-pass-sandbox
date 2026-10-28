@@ -1,106 +1,64 @@
-# ShouldNotPass (`snp`): run untrusted repos in a VM that cannot reach your host
-![You shall not pass](https://media3.giphy.com/media/v1.Y2lkPTc5MGI3NjExenA4OHpteWVieGZrZnI0ZTZ5ZHdzZWpiYXJqMW5uNzZhOXZxdHk1MCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/S6sZaHdqsGYFO/giphy.gif)
+# ShouldNotPass
 
-Run untrusted repos in a VM that reaches the internet but not your host, LAN or private networks. One script, `snp.py`, does everything. All state lives in this folder, under `.snp/` (git-ignored).
+Run untrusted repos (fake-recruiter take-homes, unknown GitHub projects) in a disposable VM that cannot reach your host or your LAN. Three parts:
 
-**Status: works on Linux.** `setup` (building a VM from nothing), `up`, `snapshot`, `reset`, the token swap and the nftables firewall are verified on Linux. The attack suite passes 26 of 26 (`leak-report.md`); a plain NAT VM passes 19 of 26 (`leak-report-baseline.md`). `snapshot` and `reset` were verified on a hand-built VM, not yet on one built by `setup`.
+| Part | Files | What it is |
+|---|---|---|
+| 1. Sandbox | `snp.py`, `firewall.py`, `proxy_addon.py`, `egress_rules.py`, `netinfo.py`, `setup-*.sh`, `report-installed.sh` | The VirtualBox VM, the host firewall and the egress proxy. This is the protection. |
+| 2. Malware | `probe.py`, `mock_recruiter.py`, `package.json`, `ATTACK-SUITE.md` | A mock hostile repo. It tries to escape and reports what got out. Test fixture only. |
+| 3. Scan and reports | `scan.py`, `leak_report.py`, `leak-report.md`, `leak-report.html` | `scan.py` checks a project before you run it. `leak_report.py` turns the attack-suite results into a report. |
 
-## TODO: test on other platforms
-The code for these exists but has never been run. Testers wanted.
-- [ ] **macOS (Intel):** VirtualBox host-only network setup, adapter names, the `pf` firewall in `firewall.py`, `netinfo.py`.
-- [ ] **Windows:** `hostonlynet` and adapter names, the Windows Firewall rules in `firewall.py` (needs an elevated terminal), DNS detection in `netinfo.py`.
-- [ ] **Linux with iptables** instead of nftables: the iptables path in `firewall.py`.
-- [ ] **Apple Silicon:** needs an arm64 Ubuntu image. `setup` stops with a message for now.
-- [ ] **Attack suite gaps:** IPv6, DNS and UDP around the proxy, a proxy-down test, and a check that `reset` removes planted files.
-
-## 0. Before you start
-- VirtualBox 7.1 or newer ([Linux downloads](https://www.virtualbox.org/wiki/Linux_Downloads)), Python 3.12 or newer with the `venv` module (on Ubuntu: `sudo apt install python3-venv`), the OpenSSH client (`ssh`, `scp`, `ssh-keygen`).
-- Nothing else to install. The proxy (mitmproxy and psutil) is installed by `snp.py` into `.snp/venv` the first time you run `setup` or `up`. It needs internet access once, for `pip`.
-- About 20 GB free disk (the 60 GB disk file grows as it fills), and 8 GB of RAM to give the VM (4 GB works for a small frontend: `--ram 4096`).
-- Admin rights once per start: the firewall step asks for your sudo password (Linux, macOS). On Windows, open an elevated (administrator) terminal first.
-- Apple Silicon is not supported yet (needs an arm64 Ubuntu image).
-- Clone the repo and work from its folder. No absolute paths are needed anywhere.
-
-## 1. Build the VM (once)
 ```
-python3 snp.py setup
+snp.py                 single entry point: setup, up, snapshot, reset, down, status, report
+firewall.py            host firewall per OS (nft/iptables, pf, Windows Firewall)
+proxy_addon.py         mitmproxy addon: egress allow list, private-address refusal, credential swap
+egress_rules.py        allow and deny rules used by proxy_addon.py
+netinfo.py             host network details for snp.py
+setup-dev.sh           guest: installs the dev tools, vm-versions command and login banner
+setup-guest-proxy.sh   guest: proxy env vars and the Claude Code placeholder token
+report-installed.sh    guest: lists installed tools with versions (vm-versions)
+probe.py               attack suite: 36 probes, run inside the VM
+mock_recruiter.py      builds a harmless fake take-home zip
+scan.py                static scan of a project (folder or zip)
+leak_report.py         probe output to leak report (md, --html)
+test_*.py              tests
 ```
-- Options: `--ram MB` (default 8192; 4096 is enough for a small frontend), `--cpus N` (default 4, or fewer if the host has fewer), `--password X` (default `dev`, console login only), `--iso FILE` (otherwise it uses the first `.iso` in this folder, or downloads Ubuntu 26.04.1 and checks its checksum).
-- It creates the host-only network (`192.168.56.0/24`, DHCP, no NAT), the VM with clipboard, drag and drop and USB off, and installs Ubuntu without asking questions. This takes 30 to 60 minutes. Don't click inside the VM window.
-- The install itself uses NAT, because the installer must reach the Ubuntu mirrors. No repo code runs yet. After the install the VM moves to the host-only network and loses NAT for good.
-- It then loads the firewall (asks for your sudo password), starts the proxy, and installs the tools over SSH: Node, npm, Python, Chrome, VS Code, Insomnia, Docker, Git and Claude Code. SSH is key-only, with a key made for you in `.snp/<vm name>/`.
-- It ends with the VM powered off.
-- If the tool install fails: fix the cause, then run `python3 snp.py provision`. It repeats only the SSH step, not the Ubuntu install.
-- A second VM next to the first: add `--name NAME` to any command.
 
-## 2. Give Claude Code its token (once, optional)
-1. On the host: `claude setup-token`. Copy the `sk-ant-oat01-...` it prints. Don't paste it into a chat.
-2. Add this line to `.env` in this folder (git-ignored):
-   ```
-   SANDBOX_OAUTH_TOKEN=sk-ant-oat01-...
-   ```
-3. The proxy reads `.env` when it starts, so run `python3 snp.py down` and `up` again if it is already running.
+TODO: move to the folder layout used in the Antrust repo (`sandbox/`, `scan/`, `attack-suite/`) once the flat layout settles. Paths in the docs below assume flat.
 
-The real token stays on the host. The VM holds only the placeholder `sk-ant-oat01-placeholder`. The proxy swaps in the real token for `api.anthropic.com` only. Check it: in the VM `claude -p hi` answers, `env | grep -i token` shows only the placeholder, and `proxy.log` on the host has a `credential-swap` line.
+## 1. Sandbox
+The VM has no route out except an HTTP proxy on the host. The host firewall drops everything else from the VM, and the proxy refuses private addresses. Open internet, nothing local. No shared folders, clipboard or USB. `snp.py reset` returns the VM to a clean snapshot after each repo.
 
-## 3. Start a session (every time)
 ```
-python3 snp.py up
+python3 snp.py setup      # once
+python3 snp.py up         # each run
+python3 snp.py reset      # after each repo
 ```
-It loads the host firewall, starts the egress proxy on `192.168.56.1:3128`, and starts the VM. The firewall is not saved across host reboots, which is why `up` loads it each time. The VM's only way out is that proxy, and the proxy refuses private addresses.
+Inside the VM, every terminal and ssh login prints the installed tools with their versions (Node.js, Python, Chrome, VS Code, Docker, Claude Code and so on). To see the list again, run:
 
-## 4. Check the VM, then save it (once)
-In the VM:
-- Chrome opens a site, `node -v` and `python3 --version` work, `docker run hello-world` works (log out and in once if Docker says permission denied), `claude -p hi` answers if you did step 2.
-- Clipboard and drag and drop do not cross in either direction, and no host files are visible.
-
-When it is the state you want to return to:
 ```
-python3 snp.py snapshot
+vm-versions
 ```
-This powers the VM off and saves it as `clean`. Run it again after you change the VM; it replaces the old one.
+From the host: `python3 snp.py report`.
 
-## 5. Run a repo, then reset (every repo)
-1. `python3 snp.py up`.
-2. Clone and run the untrusted repo inside the VM only.
-3. `python3 snp.py reset`. It powers the VM off, restores `clean`, and starts it again. Anything the repo wrote, installed or planted is gone.
+Details, firewall per OS, proxy log and the optional `allow.txt`: `VM-SETUP.md`.
 
-Run `reset` after every repo. That is what makes the sandbox hold; a VM you keep using is a VM that can stay infected.
+## 2. Malware (attack suite)
+Copy `probe.py`, `mock_recruiter.py` and `package.json` into the VM and run `SNP_VM=1 npm install`. It refuses to run elsewhere. Each probe has an expected result; a `FAIL` means the sandbox leaked. `mock_recruiter.py` builds a harmless copy of the real fake-recruiter case (git `post-checkout` hook, base64 `fetch` plus `new Function`).
 
-## 6. Other commands
-| Command | What it does |
-|---|---|
-| `python3 snp.py status` | VM state, proxy, snapshots |
-| `python3 snp.py down` | Power off the VM and stop the proxy |
-| `python3 snp.py provision` | Repeat the tool install over SSH; ends with the install report |
-| `python3 snp.py report` | List what is installed in the running VM, with versions |
-| `python3 firewall.py status` | Show the host firewall rule |
-| `python3 firewall.py down` | Remove the host firewall rule |
-| `--dry-run` on any command | Print the commands, change nothing |
+## 3. Scan and reports
+Two different questions:
 
-## 7. Check that the sandbox holds
-1. In the VM, copy `attack-suite/` over (or clone this repo there), then run `SNP_VM=1 python3 probe.py` inside it. It runs 26 probes (host ports, private networks, metadata, redirects, secrets) and writes `probe-report.json`. It sends nothing sensitive.
-2. On the host: `python3 -I leak_report.py probe-report.json > leak-report.md`. Today's result on Linux: 26 probes, 0 leaks. Open mode lets the VM reach any public site, which the report lists as accepted.
-3. Run the unit tests on the host: `python3 test_snp.py` (and `test_egress_rules.py`, `test_credential_swap.py` with the venv python in `.snp/venv`).
+- **Is this project dangerous?** `python3 scan.py PATH` (folder or zip) lists hooks, install scripts, encoded URLs and other red flags before anything runs. Optional. Exit code 1 on a high finding.
+- **Does the sandbox hold?** `python3 leak_report.py probe-report.json [--html]` turns the attack-suite output into a report. Current result: `leak-report.md` and `leak-report.html`.
 
-## 8. Tighten it (optional)
-- The proxy is in open mode: any public site is reachable, so a hostile repo can send data to one. An allow list (`allow.txt`) blocks the rest. Start with `SANDBOX_MODE=log` to learn what your work needs, then enforce.
-- Keep VirtualBox patched. A VM escape is the one risk the sandbox adds.
-- Services on your host that listen on all interfaces are reachable from the VM at `192.168.56.1` unless the firewall step is loaded. `up` loads it.
-- Don't sign in to personal accounts inside the VM. Use throwaway credentials.
+## How they connect
+The mock malware is the shared fixture. The scan flags it (4 high findings). Run inside the sandbox, it fails to get out (36 of 36 probes as expected).
 
-## 9. Undo
-- `python3 snp.py down`, then `python3 firewall.py down`.
-- Delete the VM: `VBoxManage unregistervm ubuntu-dev --delete` (or your `--name`).
-- Delete the folder `.snp/` to remove the venv, keys and proxy CA.
-
-## Troubleshooting
-| Symptom | Likely cause and fix |
-|---|---|
-| `VirtualBox not found` | Install VirtualBox 7.1+ and put `VBoxManage` on PATH |
-| `already locked by a session` on start | Wait a few seconds. `up` retries by itself for a minute |
-| `no snapshot yet` on `reset` | Run `python3 snp.py snapshot` first |
-| `timed out waiting for ...` | The step it names took over its limit. Check the VM window and the host load, then run `provision` |
-| The VM cannot reach anything | Is the proxy up? `python3 snp.py status`. Did a host reboot drop the firewall? Run `up` |
-| `claude` in the VM cannot sign in | `.env` has no `SANDBOX_OAUTH_TOKEN`, or the proxy started before you added it. Run `down` then `up` |
-| Windows: firewall step fails | Run the terminal as administrator |
+## Tests
+```
+python3 test_snp.py
+python3 test_scan.py
+.snp/venv/bin/python test_egress_rules.py
+.snp/venv/bin/python test_credential_swap.py
+```
