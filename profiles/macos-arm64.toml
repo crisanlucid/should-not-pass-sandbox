@@ -1,0 +1,5 @@
+backend = "qemu"
+url = "https://cloud-images.ubuntu.com/releases/26.04/release/"
+image = "ubuntu-26.04-server-cloudimg-arm64.img"
+disk_mb = 61440
+desktop = true

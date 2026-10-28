@@ -71,13 +71,15 @@ def test_network_finds_adapter_by_address():
                "Name:            VirtualBox Host-Only Ethernet Adapter\nIPAddress:       192.168.56.1\n")
     with mock.patch.object(snp, "vbm", side_effect=lambda *a, **kw: listing if a[:2] == ("list", "hostonlyifs") else snp.HOST_IP + " HostInterfaceNetworking-x"):
         assert snp.network() == "VirtualBox Host-Only Ethernet Adapter"
+    with mock.patch.object(snp, "vm_prop", return_value="10.0.2.15"):
+        assert snp.VirtualBox(snp).ssh_address() is None
 
 
 def test_name_selects_the_vm():
     # a second VM must not touch the first: every command acts on --name
     seen = []
     with mock.patch.object(snp, "vbm", side_effect=lambda *a, **kw: seen.append(a) or ""), mock.patch.object(snp, "VM", snp.VM), mock.patch.object(snp, "DRY", False), \
-            mock.patch("sys.argv", ["snp.py", "--name", "snp-test", "--dry-run", "status"]), mock.patch("builtins.print"):
+            mock.patch("sys.argv", ["snp.py", "--profile", "virtualbox-amd64", "--name", "snp-test", "--dry-run", "status"]), mock.patch("builtins.print"):
         snp.main()
         assert snp.VM == "snp-test"
     assert seen and all("snp-test" in a and "ubuntu-dev" not in a for a in seen), seen
@@ -110,6 +112,85 @@ def test_env_file():
 def test_old_python_is_refused():
     with mock.patch.object(snp.sys, "version_info", (3, 11, 0)), mock.patch.object(snp.sys, "argv", ["snp.py", "status"]):
         exits(snp.main, "3.12", "python.org")
+
+
+def test_qemu_network_and_native_acceleration():
+    vm = snp.Qemu(snp)
+    config = dict(ram=2048, cpus=2, ssh_port=22222, firmware="/firmware.fd")
+    with mock.patch.object(vm, "tool", side_effect=lambda name: name):
+        command = vm.command(config, headless=True)
+    network = command[command.index("-netdev") + 1]
+    assert "restrict=on,ipv6=off" in network and command.count("-netdev") == 1
+    assert "hostfwd=tcp:127.0.0.1:22222-:22" in network
+    assert "guestfwd=tcp:10.0.2.100:3128-cmd:/usr/bin/nc 127.0.0.1 3128" in network
+    assert "virt,accel=hvf" in command and "-nodefaults" in command
+    assert not any(flag in command for flag in ("-virtfs", "-fsdev", "-spice", "-vnc"))
+    assert any("seed.iso" in str(arg) and "readonly=on" in str(arg) for arg in command)
+
+
+def test_qemu_seed_uses_shared_bootstrap():
+    import json
+    with tempfile.TemporaryDirectory() as d, mock.patch.object(snp, "STATE", Path(d)):
+        vm = snp.Qemu(snp)
+        vm.root.mkdir()
+        captured = {}
+        def run(cmd, **kw):
+            captured.update({p.name: p.read_text() for p in (vm.root / "seed").iterdir()})
+            (vm.root / "seed.iso").touch()
+        script = snp.bootstrap("ssh-ed25519 PUBLIC")
+        password = "quoted'\"\npassword"
+        with mock.patch.object(snp, "run", side_effect=run):
+            vm.write_seed("ssh-ed25519 PUBLIC", password, script)
+        data = json.loads(captured["user-data"].split("\n", 1)[1])
+        assert data["users"][0]["plain_text_passwd"] == password
+        assert data["runcmd"] == [["bash", "-c", script]] and not data["ssh_pwauth"]
+        network = json.loads(captured["network-config"])["ethernets"]["sandbox"]
+        assert network["addresses"] == ["10.0.2.15/24"] and not network["dhcp6"]
+        assert not network["accept-ra"] and "nameservers" not in network
+        assert not (vm.root / "seed").exists()
+
+
+def test_qemu_reset_requires_and_restores_firmware():
+    import json
+    with tempfile.TemporaryDirectory() as d, mock.patch.object(snp, "STATE", Path(d)):
+        vm = snp.Qemu(snp)
+        vm.root.mkdir()
+        (vm.root / "disk.qcow2").touch()
+        (vm.root / "vars.fd").write_bytes(b"planted")
+        with mock.patch.object(vm, "tool", side_effect=lambda name: name), \
+                mock.patch.object(snp, "run", return_value=json.dumps({"snapshots": [{"name": "clean"}]})) as run:
+            exits(lambda: vm.snapshot(restore=True), "both disk and UEFI")
+            assert not any("-a" in call.args[0] for call in run.call_args_list)
+            (vm.root / "vars.clean.fd").write_bytes(b"clean")
+            vm.snapshot(restore=True)
+            assert (vm.root / "vars.fd").read_bytes() == b"clean"
+            run.side_effect = [json.dumps({"snapshots": [{"name": "clean"}]}), "", SystemExit("disk snapshot failed")]
+            exits(vm.snapshot, "disk snapshot failed")
+            assert not (vm.root / "vars.clean.fd").exists()
+
+
+def test_qemu_monitor_eof_and_private_directory():
+    with tempfile.TemporaryDirectory() as d:
+        directory = Path(d)
+        vm = snp.Qemu(snp)
+        with mock.patch.object(snp.Qemu, "control_dir", new_callable=mock.PropertyMock, return_value=directory), \
+                mock.patch("vm_backends.socket.socket") as socket:
+            stream = socket.return_value.__enter__.return_value.makefile.return_value.__enter__.return_value
+            stream.readline.return_value = b""
+            assert not vm.active()  # QEMU may close before its greeting during shutdown.
+            directory.chmod(0o755)
+            exits(vm.active, "unsafe QMP socket directory")
+
+
+def test_macos_dry_setup_uses_no_virtualbox_and_writes_nothing():
+    with tempfile.TemporaryDirectory() as d, mock.patch.object(snp, "STATE", Path(d) / ".snp"), \
+            mock.patch.object(snp, "DRY", False), mock.patch.object(snp, "VM", "mac-test"), \
+            mock.patch.object(snp, "BACKEND", snp.BACKEND), mock.patch.object(snp, "proxy_up", return_value=False), \
+            mock.patch.object(snp, "vbm", side_effect=AssertionError("VirtualBox called")), \
+            mock.patch("sys.argv", ["snp.py", "--dry-run", "--headless", "--profile", "macos-arm64", "setup"]), \
+            mock.patch("builtins.print"):
+        snp.main()
+        assert not snp.STATE.exists()
 
 
 for name, fn in list(globals().items()):

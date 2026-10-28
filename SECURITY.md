@@ -12,8 +12,8 @@ ShouldNotPass exists to contain hostile code, so reports of a way out are the mo
 ## Known and accepted (not a report)
 - In open mode, the VM can send data to any public site.
 - `dev` is in the `docker` group and has passwordless sudo: that is root inside the VM, by design.
-- macOS, Windows and Apple Silicon are untested.
-- A VirtualBox escape is a VirtualBox bug: report it to Oracle. If it works because of how this project configures the VM, report it here too.
+- Apple Silicon has live setup/isolation/reset coverage. macOS Intel and Windows remain untested; the VirtualBox adapter needs live x86_64 re-testing.
+- A QEMU or VirtualBox escape is a hypervisor bug: report it upstream. If it works because of how this project configures the VM, report it here too.
 
 ## How to report
 Use GitHub's private reporting: the repository's **Security** tab, then **Report a vulnerability**. Please do not open a public issue for an escape that still works. Include the steps, the VM name or `setup` options used, and the output of `python3 snp.py status`. Expect a first answer within a week; this is a personal project.

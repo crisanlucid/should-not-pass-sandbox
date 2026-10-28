@@ -8,13 +8,16 @@ import os
 import socket
 import sys
 import urllib.request
+import urllib.parse
 from pathlib import Path
 
 if os.environ.get("SNP_VM") != "1":
     sys.exit("refusing to run: this probes the network it is on. Run it inside the VM with SNP_VM=1")
 
-HOST = "192.168.56.1"      # host-only address of the host
-PROXY = f"http://{HOST}:3128"
+PROXY = os.environ.get("http_proxy", "http://192.168.56.1:3128")
+PROXY_HOST = urllib.parse.urlsplit(PROXY).hostname
+# QEMU's proxy endpoint is separate from its host/gateway address.
+HOST = "10.0.2.2" if PROXY_HOST == "10.0.2.100" else PROXY_HOST
 results = []
 
 
@@ -53,7 +56,7 @@ def http(url, proxy=PROXY, t=8):
 # 1. Host services reachable from the VM (only the proxy port may answer)
 for port in (22, 3000, 7070, 8443, 32400):
     record(f"host port {port}", "blocked", tcp(HOST, port))
-record("host proxy port 3128", "open", tcp(HOST, 3128), "(must stay open)")
+record("host proxy port 3128", "open", tcp(PROXY_HOST, 3128), "(must stay open)")
 
 # 2. Direct network access, no proxy
 record("raw tcp to 1.1.1.1:443", "blocked", tcp("1.1.1.1", 443))
@@ -69,6 +72,7 @@ for name, url in (("router via proxy", "http://192.168.178.1/"),
                   ("host-only IP via proxy", f"http://{HOST}:7070/"),
                   ("decimal-encoded 127.0.0.1", "http://2130706433/"),
                   ("hex-encoded 127.0.0.1", "http://0x7f000001/"),
+                  ("octal-encoded 127.0.0.1", "http://0177.0.0.1/"),
                   ("hostname -> 127.0.0.1", "http://localhost:7070/"),
                   ("redirect to metadata", "https://httpbin.org/redirect-to?url=http://169.254.169.254/&status=302")):
     record(name, "blocked", http(url))
@@ -86,7 +90,7 @@ record("real secrets in environment", "none", "none" if not real else ",".join(r
 record("docker socket usable (info)", "open", "open" if os.access("/var/run/docker.sock", os.W_OK) else "blocked",
        "(dev is in the docker group by design: root inside the VM, not on the host)")
 record("shared folders mounted", "none", "none" if not [m for m in Path("/proc/mounts").read_text().splitlines()
-                                                         if "vboxsf" in m] else "mounted")
+                                                         if any(fs in m.split()[2:3] for fs in ("vboxsf", "9p", "virtiofs"))] else "mounted")
 
 # 6. Exfiltration: allowed by design while the proxy is in open mode (not a pass/fail of the network)
 record("exfil to public site (info)", "reached", http("https://example.com"),
