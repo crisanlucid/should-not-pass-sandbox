@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ShouldNotPass (snp): run untrusted repos in an isolated VirtualBox VM on Linux, macOS or Windows x64.
+"""ShouldNotPass (snp): run untrusted repos in an isolated VM: VirtualBox on x86_64, native QEMU/HVF on Apple Silicon.
 
   python3 snp.py setup [--iso FILE] [--ram MB] [--cpus N] [--password PW]   once: build the VM and install the tools
   python3 snp.py up                                         every run: firewall, proxy, start the VM
@@ -10,10 +10,10 @@
   add --state-dir PATH before the command to store VM disks, ISO, keys and runtime on another drive
   add --dry-run to print the commands without running them, --name NAME to work on another VM (default ubuntu-dev)
 
-Needs: VirtualBox 7.1+, Python 3.12+, ssh/scp/ssh-keygen (OpenSSH client), admin rights for the firewall step.
+Needs: VirtualBox 7.1+ (x86_64) or Homebrew QEMU (Apple Silicon), Python 3.12+, ssh/scp/ssh-keygen (OpenSSH client), admin rights for the firewall step.
 Secrets (SSH key, proxy CA; the VM password is `dev` unless --password) are kept per developer in .snp/ (git-ignored).
 Put SANDBOX_OAUTH_TOKEN (from `claude setup-token`) in .env next to this file; only the host proxy ever sees it.
-See README.md for the current validation status; Apple Silicon/ARM hosts need an arm64 image and are unsupported.
+See README.md for the current validation status; the extracted VirtualBox adapter needs live x86_64 re-testing.
 """
 import argparse
 import hashlib
@@ -32,6 +32,8 @@ import time
 import urllib.request
 from pathlib import Path
 
+from vm_backends import Qemu, VirtualBox
+
 HERE = Path(__file__).resolve().parent
 STATE = HERE / ".snp"
 VM, HOST_IP, PORT, USER = "ubuntu-dev", "192.168.56.1", 3128, "dev"
@@ -39,6 +41,8 @@ UBUNTU = "https://releases.ubuntu.com/26.04.1/"
 ISO_NAME = "ubuntu-26.04.1-desktop-amd64.iso"
 WIN = platform.system() == "Windows"
 DRY = False
+HEADLESS = False
+PROFILE = {"disk_mb": 61440, "desktop": False}
 
 
 def exe(name):
@@ -283,7 +287,7 @@ def network():
 def find_iso(given):
     if given:
         return Path(given)
-    local = next(HERE.glob("*.iso"), None)
+    local = next(HERE.glob("*.iso"), None) if not BACKEND.cloud_image else None
     if local:
         return local
     dest = STATE / ISO_NAME
@@ -371,9 +375,9 @@ def proxy_ca_bundle():
 
 
 def guest_ssh():
-    """Common ssh options and the VM address (needs the VM running)."""
-    ip = vm_prop("/VirtualBox/GuestInfo/Net/0/V4/IP") or "<vm ip>"
-    return ssh_options(), f"{USER}@{ip}"
+    """Common ssh/scp options and the isolated VM address."""
+    ip, port = BACKEND.ssh_address() or ("<vm ip>", 22)
+    return [*ssh_options(), "-o", f"Port={port}"], f"{USER}@{ip}"
 
 
 def report(_=None):
@@ -394,34 +398,51 @@ def probe(a):
 
 
 def provision(_=None):
-    """Install the tools over SSH. setup runs it; run it alone to resume after a failed install step (it can be repeated)."""
+    """Install the tools over SSH; rerun after a failed tool install."""
     pw_file = STATE / VM / "password"
     pw = pw_file.read_text() if pw_file.exists() else "<password>"
-    up(start_vm=True)
+    up()
     ca = STATE / "mitmproxy" / "mitmproxy-ca-cert.pem"
     wait("the proxy CA", ca.exists, 1)
-    wait("the VM to get an address on the host-only network", lambda: vm_prop("/VirtualBox/GuestInfo/Net/0/V4/IP").startswith("192.168.56."), 15)
-    ip = vm_prop("/VirtualBox/GuestInfo/Net/0/V4/IP") or "<vm ip>"
-    ssh = ssh_options()
+
+    def ready():
+        if not BACKEND.ssh_address():
+            return False
+        ssh, host = guest_ssh()
+        return run(["ssh", *ssh, host, "printf snp-ready"], check=False) == "snp-ready"
+
+    wait("SSH in the isolated VM", ready, 15)
+    ssh, host = guest_ssh()
+    if BACKEND.cloud_image:
+        run(["ssh", *ssh, host, "sudo cloud-init status --wait"], show=True)
     certs = [ca, *sorted((STATE / VM / "trusted-ca").glob("*.crt"))]
-    copy_guest_scripts(ssh, f"{USER}@{ip}", ["setup-guest-proxy.sh", "setup-dev.sh", "report-installed.sh"], certs)
+    copy_guest_scripts(ssh, host, ["setup-guest-proxy.sh", "setup-dev.sh", "report-installed.sh"], certs)
     ca_args = " ".join(shlex.quote(cert.name) for cert in certs)
-    run(["ssh", *ssh, f"{USER}@{ip}", f"bash setup-guest-proxy.sh {ca_args} && set -a && . /etc/environment && set +a && bash setup-dev.sh && bash report-installed.sh"], show=True)  # ssh is not a login shell: load the proxy variables for curl
-    stop_vm()
+    run(["ssh", *ssh, host, f"bash setup-guest-proxy.sh --proxy-url {shlex.quote(BACKEND.proxy_url)} {ca_args} && set -a && . /etc/environment && set +a && SNP_DESKTOP={int(PROFILE['desktop'])} bash setup-dev.sh && bash report-installed.sh"], show=True)
+    BACKEND.stop()
     print(f"\ndone. VM console password (sudo needs none): {pw}\n"
           "Next: `up`, check the VM works (browser, npm, Claude Code), then `python3 snp.py snapshot` to save that state.")
 
 
+def bootstrap(pub):
+    return (f"install -d -m700 -o {USER} -g {USER} /home/{USER}/.ssh && "
+            f"printf '%s\\n' {shlex.quote(pub)} > /home/{USER}/.ssh/authorized_keys && "
+            f"chown {USER}:{USER} /home/{USER}/.ssh/authorized_keys && chmod 600 /home/{USER}/.ssh/authorized_keys && "
+            "if ! command -v sshd >/dev/null; then apt-get install -y openssh-server; fi && ssh-keygen -A && "
+            "printf 'PasswordAuthentication no\\nKbdInteractiveAuthentication no\\nPermitRootLogin no\\n' > /etc/ssh/sshd_config.d/10-snp.conf && "
+            f"printf '{USER} ALL=(ALL) NOPASSWD:ALL\\n' > /etc/sudoers.d/{USER} && chmod 440 /etc/sudoers.d/{USER} && "
+            "systemctl enable --now ssh && systemctl restart ssh")
+
+
 def setup(a):
-    if platform.machine().lower() in ("arm64", "aarch64"):
-        sys.exit("Apple Silicon / ARM host: needs an arm64 Ubuntu image, not supported yet")
-    if any(line.startswith(f'"{VM}" ') for line in vbm("list", "vms", ro=True).splitlines()):
-        sys.exit(f"VM {VM} already exists: remove it first (VBoxManage unregistervm {VM} --delete)")
+    if BACKEND.cloud_image and a.baseline:
+        sys.exit("--baseline is only available with VirtualBox")
+    BACKEND.check_new()
     if not DRY:
         prepare_state()
-        (STATE / VM).mkdir(parents=True, exist_ok=True)  # per-VM secrets; the venv and proxy CA in STATE are shared
+        (STATE / VM).mkdir(parents=True, mode=0o700, exist_ok=True)
     venv()
-    iso = find_iso(a.iso)
+    image = find_iso((a.image or a.iso) if BACKEND.cloud_image else a.iso)
     key = STATE / VM / "id_ed25519"
     if not key.exists():
         run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", key])
@@ -429,38 +450,12 @@ def setup(a):
     if not pw_file.exists() and not DRY:
         pw_file.write_text(a.password)
         pw_file.chmod(0o600)
+    pw = pw_file.read_text() if pw_file.exists() else "<password>" if DRY else a.password
     pub = key.with_suffix(".pub").read_text().strip() if not DRY else "<public key>"
-    net = network()
+    BACKEND.create(a, image, pub, pw, bootstrap(pub))
+    if not a.baseline:
+        provision()
 
-    # Install phase: NAT, because the installer must reach the Ubuntu mirrors. No repo code runs yet.
-    vbm("createvm", "--name", VM, "--ostype", "Ubuntu_64", "--basefolder", STATE / "vms", "--register")
-    vbm("modifyvm", VM, "--memory", a.ram, "--cpus", a.cpus, "--vram", 128, "--graphicscontroller", "vmsvga",
-        "--nic1", "nat", *(item for i in range(2, 9) for item in (f"--nic{i}", "none")),
-        "--boot1", "disk", "--boot2", "dvd", "--boot3", "none", "--boot4", "none",
-        "--clipboard-mode", "disabled", "--drag-and-drop", "disabled",
-        "--usb-ohci", "off", "--usb-ehci", "off", "--usb-xhci", "off")
-    disk = STATE / "vms" / VM / f"{VM}.vdi"
-    vbm("createmedium", "disk", "--filename", disk, "--size", 61440)
-    vbm("storagectl", VM, "--name", "SATA", "--add", "sata")
-    vbm("storageattach", VM, "--storagectl", "SATA", "--port", 0, "--device", 0, "--type", "hdd", "--medium", disk)
-    late = (f"mkdir -p /home/{USER}/.ssh && echo {shlex.quote(pub)} > /home/{USER}/.ssh/authorized_keys && "
-            f"chown -R 1000:1000 /home/{USER}/.ssh && chmod 700 /home/{USER}/.ssh && chmod 600 /home/{USER}/.ssh/authorized_keys && "
-            "apt-get install -y openssh-server virtualbox-guest-utils virtualbox-guest-x11 && ssh-keygen -A && echo 'PasswordAuthentication no' > /etc/ssh/sshd_config.d/10-snp.conf && "
-            f"echo '{USER} ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/{USER} && "
-            "printf complete > /var/lib/snp-install-complete")
-    vbm("unattended", "install", VM, "--iso", iso, "--user", USER, "--password-file", pw_file, "--full-user-name", USER,
-        "--no-install-additions", "--post-install-command", late, "--start-vm", "gui")
-    wait("the installed guest and completed post-install configuration", install_complete, 90)
-    stop_vm()
-    if a.baseline:  # test control: a plain NAT VM with no sandbox, to prove the attack suite can detect leaks
-        vbm_unlocked("modifyvm", VM, "--natpf1", "ssh,tcp,127.0.0.1,2223,,22")
-        return print(f"\nbaseline VM {VM} built on NAT, NO sandbox. `VBoxManage startvm {VM}`, then ssh -p 2223 -i {key} {USER}@127.0.0.1. Delete it when done.")
-    vbm_unlocked("modifyvm", VM, "--nic1", "hostonly", "--hostonlyadapter1", net)  # from here on: no NAT, proxy is the only way out
-
-    provision()
-
-
-# ---- run -------------------------------------------------------------------------------------------------------
 
 def stop_vm():
     if DRY:
@@ -493,18 +488,19 @@ def up(start_vm=True):
     if not DRY:
         prepare_state()
     venv()
-    if not DRY:
-        check_vm_isolation()
-    # Linux only: vboxnet0 has no address until a VM uses it, so firewall.py cannot find it. Start the VM first.
-    # Windows keeps its adapter up without a VM, so it is unchanged.
-    if not DRY and start_vm and platform.system() == "Linux" and not linux_hostonly_has_address():
-        vbm_unlocked("startvm", VM, "--type", "gui")
-        wait("the host-only link to get its address", linux_hostonly_has_address, 1)
-    # firewall.py elevates itself: sudo (Linux/macOS) or a UAC prompt (Windows)
-    if DRY:
-        print("+", exe("python"), HERE / "firewall.py", "up")
-    else:
-        subprocess.run([exe("python"), str(HERE / "firewall.py"), "up"], check=True)  # not captured: sudo needs the terminal
+    if BACKEND.host_firewall:
+        if not DRY:
+            check_vm_isolation()
+        # Linux only: vboxnet0 has no address until a VM uses it, so firewall.py cannot find it. Start the VM first.
+        # Windows keeps its adapter up without a VM, so it is unchanged.
+        if not DRY and start_vm and platform.system() == "Linux" and not linux_hostonly_has_address():
+            BACKEND.start()
+            wait("the host-only link to get its address", linux_hostonly_has_address, 1)
+        # firewall.py elevates itself: sudo (Linux/macOS) or a UAC prompt (Windows)
+        if DRY:
+            print("+", exe("python"), HERE / "firewall.py", "up")
+        else:
+            subprocess.run([exe("python"), str(HERE / "firewall.py"), "up"], check=True)  # not captured: sudo needs the terminal
     env = load_env()
     if not (env.get("SANDBOX_OAUTH_TOKEN") or env.get("SANDBOX_ANTHROPIC_KEY")):
         print("note: no SANDBOX_OAUTH_TOKEN in .env, Claude Code in the VM will not authenticate")
@@ -530,12 +526,12 @@ def up(start_vm=True):
                 sys.exit(f"proxy exited ({p.returncode}); see {STATE / 'proxy.out'}")
             return proxy_up()
         wait("the proxy to listen", ready if not DRY else proxy_up, 1)
-    if start_vm and vm_state() != "running":
-        vbm_unlocked("startvm", VM, "--type", "gui")
+    if start_vm:
+        BACKEND.start()
 
 
 def down(_=None):
-    stop_vm()
+    BACKEND.stop()
     pid = STATE / "proxy.pid"
     if pid.exists() and not DRY:
         p = proxy_process()
@@ -552,35 +548,27 @@ def down(_=None):
 
 
 def has_snapshot():
-    return bool(re.search(r"Name: clean \(UUID:", vbm("snapshot", VM, "list", ro=True, check=False)))
+    return "clean" in BACKEND.snapshots()
 
 
 def snapshot(_=None):
-    """Save the current, working VM as the state `reset` returns to. Replaces an older one."""
-    stop_vm()
-    if has_snapshot():
-        vbm_unlocked("snapshot", VM, "delete", "clean")
-    vbm_unlocked("snapshot", VM, "take", "clean")
+    """Save the current VM as `clean`, including mutable firmware state."""
+    BACKEND.stop()
+    BACKEND.snapshot()
     print("saved snapshot `clean`; `python3 snp.py reset` returns to it")
 
 
 def reset(_=None):
     if not DRY and not has_snapshot():
         sys.exit("no snapshot yet: get the VM working, then run `python3 snp.py snapshot`")
-    state = vm_state() if not DRY else ""
-    if DRY or state != "poweroff":
-        if state == "saved":
-            vbm_unlocked("discardstate", VM)
-        else:
-            vbm("controlvm", VM, "poweroff", check=False)
-        wait("the VM to power off", lambda: vm_state() == "poweroff", 2)
-    vbm_unlocked("snapshot", VM, "restore", "clean")
+    BACKEND.stop(force=True)
+    BACKEND.snapshot(restore=True)
     up()
 
 
 def status(_=None):
-    print(f"VM {VM}: {vm_state() or 'not found'}\nproxy {HOST_IP}:{PORT}: {'listening' if proxy_up() else 'down'}")
-    print(vbm("snapshot", VM, "list", ro=True, check=False).strip() or "no snapshots")
+    print(f"VM {VM}: {BACKEND.state() or 'not found'}\nproxy {HOST_IP}:{PORT}: {'listening' if proxy_up() else 'down'}")
+    print(", ".join(BACKEND.snapshots()) or "no snapshots")
 
 
 def reexec(python, args):
@@ -598,11 +586,13 @@ def reexec(python, args):
 
 
 def main():
-    global DRY, VM, STATE
+    global DRY, VM, STATE, HEADLESS, BACKEND, PROFILE, HOST_IP, UBUNTU, ISO_NAME
     if sys.version_info < (3, 12):  # mitmproxy needs 3.12+; fail here, not in pip
         sys.exit(f"Python 3.12 or newer is required (this is {sys.version.split()[0]}): https://www.python.org/downloads/")
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--headless", action="store_true", help="start without a VM window")
+    p.add_argument("--profile", choices=("macos-arm64", "virtualbox-amd64"), help="defaults to the host architecture")
     p.add_argument("--name", default=VM, help="VM name, default %(default)s; lets a second VM exist next to the first")
     p.add_argument("--state-dir", type=Path, default=Path(os.environ.get("SNP_STATE_DIR", STATE)),
                    help="state folder (VM disks, ISO, keys, proxy and venv); use the same path for every command")
@@ -612,6 +602,7 @@ def main():
     s = sub.add_parser("setup")
     s.add_argument("--baseline", action="store_true", help="test control: stop after the install, leave the VM on NAT with no sandbox")
     s.add_argument("--iso")
+    s.add_argument("--image", help="local ARM64 qcow2 image for the macos-arm64 profile")
     s.add_argument("--password", default="dev", help="console login only (SSH is key-only, sudo needs none); default %(default)s")
     s.add_argument("--ram", type=int, default=8192, help="MB, default %(default)s (4096 is enough for a small frontend)")
     s.add_argument("--cpus", type=int, default=min(4, os.cpu_count() or 2))
@@ -621,11 +612,22 @@ def main():
     pr.add_argument("--gateway", type=ipaddress.IPv4Address, help="your router IP; without it the router probes are skipped")
     a = p.parse_args()
     DRY, VM, STATE = a.dry_run, a.name, a.state_dir.expanduser().resolve()
-    if not VM or VM in (".", "..") or Path(VM).name != VM:
+    if not VM or VM in (".", "..") or "/" in VM or "\\" in VM:
         p.error("--name must be a folder name")
     if WIN and (not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", VM) or VM.endswith(".")
             or VM.split(".")[0].upper() in {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}):
         p.error("--name must be a safe folder name (letters, digits, dash, underscore or dot; no Windows device names)")
+    HEADLESS = a.headless
+    apple_silicon = platform.system() == "Darwin" and platform.machine().lower() in ("arm64", "aarch64")
+    name = a.profile or ("macos-arm64" if apple_silicon else "virtualbox-amd64")
+    if name == "macos-arm64" and not apple_silicon and not DRY:
+        p.error("macos-arm64 requires native Apple Silicon macOS")
+    if name == "virtualbox-amd64" and platform.machine().lower() in ("arm64", "aarch64") and not DRY:
+        p.error("virtualbox-amd64 requires an x86_64 host")
+    import tomllib
+    PROFILE = tomllib.loads((HERE / "profiles" / f"{name}.toml").read_text())
+    BACKEND = (Qemu if PROFILE["backend"] == "qemu" else VirtualBox)(sys.modules[__name__])
+    HOST_IP, UBUNTU, ISO_NAME = BACKEND.listen_host, PROFILE["url"], PROFILE["image"]
     if not DRY and a.cmd in ("setup", "up", "provision", "reset"):
         prepare_state()
         venv()
@@ -638,6 +640,9 @@ def main():
             p.error("--ca-cert applies only to setup or provision")
         store_trusted_ca(a.ca_cert)
     {"setup": setup, "up": lambda a: up(), "provision": provision, "report": report, "snapshot": snapshot, "down": down, "reset": reset, "status": status, "probe": probe}[a.cmd](a)
+
+
+BACKEND = VirtualBox(sys.modules[__name__])
 
 
 if __name__ == "__main__":

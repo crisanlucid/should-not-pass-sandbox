@@ -43,6 +43,13 @@ class Rules:
 
     def resolve(self, host, port):
         """Resolve once, reject if ANY answer is private, return the IP to connect to (pins against DNS rebinding)."""
+        # Darwin getaddrinfo treats 0177.0.0.1 as 177.0.0.1, while browsers and
+        # Linux accept the historical octal spelling of loopback. Normalize numeric
+        # IPv4 forms first, without DNS, so every host uses the same deny decision.
+        try:
+            host = socket.inet_ntoa(socket.inet_aton(host))
+        except OSError:
+            pass
         infos = self.resolver(host, port, type=socket.SOCK_STREAM)
         addrs = []
         for info in infos:

@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Point the guest at the host egress proxy. Run inside the VM as user dev; asks for the sudo password.
-#   bash setup-guest-proxy.sh [proxy-ca.pem [host-ca.crt ...]]
+#   bash setup-guest-proxy.sh [--proxy-url URL] [proxy-ca.pem [host-ca.crt ...]]
 # Over SSH use a terminal: ssh -t dev@192.168.56.101 'bash setup-guest-proxy.sh'
 set -euo pipefail
 P=http://192.168.56.1:3128
+if [ "${1:-}" = --proxy-url ]; then P=$2; shift 2; fi
 NP=localhost,127.0.0.1,::1
 S() { sudo "$@"; }
 T=$(mktemp -d)
@@ -26,7 +27,7 @@ printf 'Acquire::http::Proxy "%s";\nAcquire::https::Proxy "%s";\n' $P $P > $T/ap
 S install -m644 $T/apt /etc/apt/apt.conf.d/95proxy
 
 # snap (VS Code, Insomnia)
-S snap set system proxy.http=$P proxy.https=$P
+if command -v snap >/dev/null; then S snap set system proxy.http="$P" proxy.https="$P"; fi
 
 # Docker daemon
 printf '[Service]\nEnvironment="HTTP_PROXY=%s" "HTTPS_PROXY=%s" "NO_PROXY=%s"\n' $P $P $NP > $T/docker
@@ -34,10 +35,10 @@ S mkdir -p /etc/systemd/system/docker.service.d
 S install -m644 $T/docker /etc/systemd/system/docker.service.d/http-proxy.conf
 S systemctl daemon-reload
 # docker is installed later by setup-dev.sh on a fresh VM; it reads the drop-in when it starts
-systemctl cat docker.service >/dev/null 2>&1 && S systemctl restart docker
+if systemctl cat docker.service >/dev/null 2>&1; then S systemctl restart docker; fi
 
 # Chrome policy
-echo '{"ProxyMode":"fixed_servers","ProxyServer":"192.168.56.1:3128","ProxyBypassList":"localhost;127.0.0.1"}' > $T/chrome
+printf '{"ProxyMode":"fixed_servers","ProxyServer":"%s","ProxyBypassList":"localhost;127.0.0.1"}\n' "$P" > "$T/chrome"
 S mkdir -p /etc/opt/chrome/policies/managed
 S install -m644 $T/chrome /etc/opt/chrome/policies/managed/proxy.json
 
