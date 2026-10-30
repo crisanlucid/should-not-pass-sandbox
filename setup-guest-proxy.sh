@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Point the guest at the host egress proxy. Run inside the VM as user dev; asks for the sudo password.
-#   bash setup-guest-proxy.sh [ca.pem]    optional: the proxy's public CA, for the Claude token swap
+#   bash setup-guest-proxy.sh [proxy-ca.pem [host-ca.crt ...]]
 # Over SSH use a terminal: ssh -t dev@192.168.56.101 'bash setup-guest-proxy.sh'
 set -euo pipefail
 P=http://192.168.56.1:3128
@@ -49,7 +49,24 @@ printf '[global]\nproxy = %s\n' $P > ~/.config/pip/pip.conf
 # Claude Code: placeholder token (the proxy swaps in the real one) and the proxy CA, only if a CA file is given
 if [ -n "${1:-}" ]; then
   S mkdir -p /opt/snp
-  S install -m644 "$1" /opt/snp/ca.pem
+  cat "$1" > "$T/node-ca.pem"
+  shift
+  if [ "$#" -gt 0 ]; then
+    S mkdir -p /opt/snp/host-ca
+    for cert in "$@"; do
+      S install -m644 "$cert" "/opt/snp/host-ca/${cert##*/}"
+      S install -m644 "$cert" "/usr/local/share/ca-certificates/snp-host-${cert##*/}"
+      cat "$cert" >> "$T/node-ca.pem"
+    done
+    S update-ca-certificates
+    # Existing Go daemons cache their root pool; reload after adding public roots.
+    for service in snapd docker; do
+      if systemctl cat "$service.service" >/dev/null 2>&1; then
+        S systemctl try-restart "$service.service"
+      fi
+    done
+  fi
+  S install -m644 "$T/node-ca.pem" /opt/snp/ca.pem
   grep -vE '^(CLAUDE_CODE_OAUTH_TOKEN|NODE_EXTRA_CA_CERTS)=' /etc/environment > $T/env2 || true
   printf 'CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-placeholder\nNODE_EXTRA_CA_CERTS=/opt/snp/ca.pem\n' >> $T/env2
   S install -m644 $T/env2 /etc/environment

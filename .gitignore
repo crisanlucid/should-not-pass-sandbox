@@ -8,3 +8,5 @@ proxy.log
 probe-report.json
 __pycache__/
 .snp/
+work/
+.pytest_cache/

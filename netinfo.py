@@ -9,10 +9,14 @@
 Needs psutil (pip install psutil). Works on Linux, macOS and Windows. Read-only.
 """
 import ipaddress as ip
+import json
 import platform
 import re
+import socket
 import subprocess
 import sys
+
+from windows_host import powershell
 
 try:
     import psutil
@@ -22,7 +26,10 @@ except ImportError:
 # Always denied, whatever the interfaces say.
 STATIC = ["0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16",
           "172.16.0.0/12", "192.168.0.0/16", "224.0.0.0/4", "240.0.0.0/4",
-          "::1/128", "fc00::/7", "fe80::/10", "ff00::/8"]
+          "::/128", "::1/128", "fc00::/7", "fe80::/10", "fec0::/10", "ff00::/8",
+          # Translation/tunnelling may embed private IPv4 destinations. Reject
+          # these mechanisms rather than let them bypass the IPv4 deny ranges.
+          "64:ff9b::/96", "64:ff9b:1::/48", "2002::/16", "2001::/32"]
 
 
 def interfaces():
@@ -30,16 +37,49 @@ def interfaces():
     out = []
     for name, addrs in psutil.net_if_addrs().items():
         for a in addrs:
-            if a.family.name not in ("AF_INET", "AF_INET6") or not a.netmask:
+            if a.family not in (socket.AF_INET, socket.AF_INET6):
                 continue
             addr = a.address.split("%")[0]  # drop IPv6 zone id
-            prefix = bin(int(ip.ip_address(a.netmask))).count("1")
+            address = ip.ip_address(addr)
+            # Some Windows interfaces have no netmask. Still deny the host's
+            # own address, rather than accidentally making it a public target.
+            prefix = address.max_prefixlen
+            if a.netmask:
+                mask = ip.ip_address(a.netmask.split("%")[0])
+                if mask.version != address.version:
+                    raise ValueError(f"invalid netmask for interface {name}")
+                prefix = int(mask).bit_count()
+                expected = ((1 << prefix) - 1) << (address.max_prefixlen - prefix)
+                if int(mask) != expected:
+                    raise ValueError(f"non-contiguous netmask for interface {name}")
             out.append((name, ip.ip_network(f"{addr}/{prefix}", strict=False), addr))
     return out
 
 
 def run(*cmd):
     return subprocess.run(cmd, capture_output=True, text=True, timeout=10).stdout
+
+
+def windows_addresses(query):
+    """Read address properties as JSON, independent of Windows display language."""
+    script = ("$ErrorActionPreference = 'Stop'; "
+              "$env:PSModulePath = Join-Path $PSHOME 'Modules'; "
+              "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); "
+              f"$values = @({query}); ConvertTo-Json -InputObject $values -Compress")
+    result = subprocess.run(powershell(script),
+                            capture_output=True, text=True, encoding="utf-8", timeout=10, check=True)
+    values = json.loads(result.stdout.lstrip("\ufeff"))
+    if not isinstance(values, list):
+        values = [values]
+    addresses = []
+    for value in values:
+        if not isinstance(value, str) or not value.strip():
+            continue
+        # IPv6 scope ids are meaningful to the OS, not to ipaddress networks.
+        address = ip.ip_address(value.strip().split("%")[0])
+        if not address.is_unspecified:
+            addresses.append(str(address))
+    return list(dict.fromkeys(addresses))
 
 
 def gateways():
@@ -50,9 +90,11 @@ def gateways():
             return re.findall(r"default via (\S+)", run("ip", "route", "show", "default"))
         if os_ == "Darwin":
             return re.findall(r"gateway: (\S+)", run("route", "-n", "get", "default"))
-        out = run("powershell", "-NoProfile", "-Command",
-                  "(Get-NetRoute -DestinationPrefix 0.0.0.0/0).NextHop")
-        return [l.strip() for l in out.splitlines() if l.strip()]
+        if os_ == "Windows":
+            return windows_addresses("Get-NetRoute | Where-Object { "
+                                     "$_.DestinationPrefix -in '0.0.0.0/0','::/0' } | "
+                                     "Select-Object -ExpandProperty NextHop")
+        return []
     except Exception:
         return []
 
@@ -60,9 +102,11 @@ def gateways():
 def dns_servers():
     try:
         if platform.system() == "Windows":
-            return []  # ponytail: not read on Windows, add via Get-DnsClientServerAddress if needed
-        return re.findall(r"^nameserver\s+(\S+)", open("/etc/resolv.conf").read(), re.M)
-    except OSError:
+            return windows_addresses("Get-DnsClientServerAddress | "
+                                     "Select-Object -ExpandProperty ServerAddresses")
+        with open("/etc/resolv.conf") as config:
+            return re.findall(r"^nameserver\s+(\S+)", config.read(), re.M)
+    except (OSError, subprocess.SubprocessError, ValueError):
         return []
 
 

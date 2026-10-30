@@ -55,4 +55,3 @@ class Rules:
                 if a in net:
                     raise Denied(f"{host} -> {a} is in {net}")
         return str(addrs[0])
-    # ponytail: 6to4 / NAT64 / Teredo embedded IPv4 addresses are not unwrapped, add if IPv6 is used

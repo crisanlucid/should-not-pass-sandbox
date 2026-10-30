@@ -1,25 +1,51 @@
 # ShouldNotPass (`snp`): run untrusted repos in a VM that cannot reach your host
 ![You shall not pass](https://media3.giphy.com/media/v1.Y2lkPTc5MGI3NjExenA4OHpteWVieGZrZnI0ZTZ5ZHdzZWpiYXJqMW5uNzZhOXZxdHk1MCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/S6sZaHdqsGYFO/giphy.gif)
 
-Run untrusted repos in a VM that reaches the internet but not your host, LAN or private networks. One script, `snp.py`, does everything. All state lives in this folder, under `.snp/` (git-ignored).
+Run untrusted repos in a VM that reaches the internet but not your host, LAN or private networks. One script, `snp.py`, does everything. Runtime state defaults to `.snp/` (git-ignored); `--state-dir` can select another folder.
 
 **Status: works on Linux.** `setup` (building a VM from nothing), `up`, `snapshot`, `reset`, the token swap and the nftables firewall are verified on Linux. The attack suite passes 26 of 26 (`leak-report.md`); a plain NAT VM passes 19 of 26 (`leak-report-baseline.md`). `snapshot` and `reset` were verified on a hand-built VM, not yet on one built by `setup`.
+
+**Windows 11 x64:** VM startup, guest network isolation, Chrome, Docker and snapshot/reset were tested on a real host. The same Python CLI is used on every OS; firewall backends are selected automatically. The offline CI matrix includes Linux, Windows and macOS. macOS has not had a live VM test.
 
 ## TODO: test on other platforms
 The code for these exists but has never been run. Testers wanted.
 - [ ] **macOS (Intel):** VirtualBox host-only network setup, adapter names, the `pf` firewall in `firewall.py`, `netinfo.py`.
-- [ ] **Windows:** `hostonlynet` and adapter names, the Windows Firewall rules in `firewall.py` (needs an elevated terminal), DNS detection in `netinfo.py`.
 - [ ] **Linux with iptables** instead of nftables: the iptables path in `firewall.py`.
 - [ ] **Apple Silicon:** needs an arm64 Ubuntu image. `setup` stops with a message for now.
 - [ ] **Attack suite gaps:** IPv6, DNS and UDP around the proxy, a proxy-down test, and a check that `reset` removes planted files.
 
 ## 0. Before you start
-- VirtualBox 7.1 or newer ([Linux downloads](https://www.virtualbox.org/wiki/Linux_Downloads)), Python 3.12 or newer with the `venv` module (on Ubuntu: `sudo apt install python3-venv`), the OpenSSH client (`ssh`, `scp`, `ssh-keygen`).
+- VirtualBox 7.1 or newer ([downloads](https://www.virtualbox.org/wiki/Downloads)), Python 3.12 or newer with the `venv` module (on Ubuntu: `sudo apt install python3-venv`), the OpenSSH client (`ssh`, `scp`, `ssh-keygen`).
 - Nothing else to install. The proxy (mitmproxy and psutil) is installed by `snp.py` into `.snp/venv` the first time you run `setup` or `up`. It needs internet access once, for `pip`.
 - About 20 GB free disk (the 60 GB disk file grows as it fills), and 8 GB of RAM to give the VM (4 GB works for a small frontend: `--ram 4096`).
 - Admin rights once per start: the firewall step asks for your sudo password (Linux, macOS). On Windows, open an elevated (administrator) terminal first.
-- Apple Silicon is not supported yet (needs an arm64 Ubuntu image).
+- ARM hosts, including Apple Silicon and Windows on ARM, are not supported yet (needs an arm64 Ubuntu image).
 - Clone the repo and work from its folder. No absolute paths are needed anywhere.
+
+### Host configuration
+
+Defaults stay the same on Linux, macOS and Windows. No OS setting or separate fork is needed.
+
+| Option | Default | Purpose |
+|---|---|---|
+| `--state-dir PATH` / `SNP_STATE_DIR` | `.snp/` in the checkout | Dedicated folder for VM disks, installer, keys and private Python runtime. Use the same value for every command. |
+| `SNP_VBOXMANAGE` | Discover VirtualBox automatically | Optional path to a nonstandard `VBoxManage` installation. |
+| `--ca-cert FILE` (repeatable) | Normal certificate trust | Explicit public inspection CA, used only by `setup`/`provision`; never a private key. |
+
+Global options go before the command. For example: `python3 snp.py --state-dir /path/to/state up`. The source checkout, `.env` and `allow.txt` stay where they are. Use a dedicated state directory; its permissions protect SSH keys and the proxy CA.
+
+On Windows, install VirtualBox, Python 3.12+ and the Windows OpenSSH Client. Use `py -3` in place of `python3` from an administrator terminal, or use the optional PowerShell launcher:
+
+```powershell
+.\snp.ps1 -Elevate --state-dir D:\snp setup --ram 4096
+.\snp.ps1 -Elevate --state-dir D:\snp up
+```
+
+Choose an existing drive with at least 30 GB free for the installer and VM. The launcher finds Python and handles UAC; output is saved to `.snp\elevated.log`. If script execution is disabled, invoke `py -3 snp.py ...` directly from an administrator terminal. Guest scripts use LF line endings; Windows does not need Bash.
+
+Windows rules apply only to the sandbox adapter and persist until `firewall.py down`; `up` verifies them before starting the VM. Keep Windows Firewall enabled. The setup refuses incompatible forwarding, bridging, sharing and firewall policy.
+
+If HTTPS inspection requires an additional root, stop the proxy, then run `python3 snp.py --ca-cert /path/to/public-root.crt provision` with the same state options. Supply one public PEM/DER CA per file. Normal trust is extended for the proxy and guest OS/Node/Chrome; TLS verification stays enabled. Machine-specific certificates are stored outside Git.
 
 ## 1. Build the VM (once)
 ```
@@ -28,6 +54,7 @@ python3 snp.py setup
 - Options: `--ram MB` (default 8192; 4096 is enough for a small frontend), `--cpus N` (default 4, or fewer if the host has fewer), `--password X` (default `dev`, console login only), `--iso FILE` (otherwise it uses the first `.iso` in this folder, or downloads Ubuntu 26.04.1 and checks its checksum).
 - It creates the host-only network (`192.168.56.0/24`, DHCP, no NAT), the VM with clipboard, drag and drop and USB off, and installs Ubuntu without asking questions. This takes 30 to 60 minutes. Don't click inside the VM window.
 - The install itself uses NAT, because the installer must reach the Ubuntu mirrors. No repo code runs yet. After the install the VM moves to the host-only network and loses NAT for good.
+- Ubuntu guest services come from `virtualbox-guest-utils`/`virtualbox-guest-x11`; installation waits for a completion marker before switching networks.
 - It then loads the firewall (asks for your sudo password), starts the proxy, and installs the tools over SSH: Node, npm, Python, Chrome, VS Code, Insomnia, Docker, Git and Claude Code. SSH is key-only, with a key made for you in `.snp/<vm name>/`.
 - It ends with the VM powered off.
 - If the tool install fails: fix the cause, then run `python3 snp.py provision`. It repeats only the SSH step, not the Ubuntu install.
@@ -81,7 +108,7 @@ Run `reset` after every repo. That is what makes the sandbox hold; a VM you keep
 ## 7. Check that the sandbox holds
 1. In the VM, copy `attack-suite/` over (or clone this repo there), then run `SNP_VM=1 python3 probe.py` inside it. It runs 26 probes (host ports, private networks, metadata, redirects, secrets) and writes `probe-report.json`. It sends nothing sensitive.
 2. On the host: `python3 -I leak_report.py probe-report.json > leak-report.md`. Today's result on Linux: 26 probes, 0 leaks. Open mode lets the VM reach any public site, which the report lists as accepted.
-3. Run the unit tests on the host: `python3 test_snp.py` (and `test_egress_rules.py`, `test_credential_swap.py` with the venv python in `.snp/venv`).
+3. Run the `test_*.py` scripts listed in `.github/workflows/tests.yml` with the private venv's Python (`.snp/venv/bin/python` on Linux/macOS, `.snp\venv\Scripts\python.exe` on Windows). These tests mock VM, SSH and firewall operations.
 
 ## 8. Tighten it (optional)
 - The proxy is in open mode: any public site is reachable, so a hostile repo can send data to one. An allow list (`allow.txt`) blocks the rest. Start with `SANDBOX_MODE=log` to learn what your work needs, then enforce.

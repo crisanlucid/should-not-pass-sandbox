@@ -42,12 +42,12 @@ def test_start_retries_while_locked():
         if a[0] == "startvm" and calls.count("startvm") < 3:
             sys.exit("VBoxManage: error: The machine 'ubuntu-dev' is already locked by a session")
         return ""
-    with mock.patch.object(snp, "vbm", vbm), mock.patch.object(snp, "venv"), mock.patch.object(snp, "proxy_up", return_value=True), \
+    with mock.patch.object(snp, "vbm", vbm), mock.patch.object(snp, "venv"), mock.patch.object(snp, "prepare_state"), mock.patch.object(snp, "check_vm_isolation"), mock.patch.object(snp, "proxy_up", return_value=True), \
             mock.patch.object(snp, "load_env", return_value={"SANDBOX_OAUTH_TOKEN": "x"}), mock.patch.object(snp, "vm_state", return_value="poweroff"), \
             mock.patch("subprocess.run"), mock.patch("time.sleep"):
         snp.up()
     assert calls.count("startvm") == 3
-    with mock.patch.object(snp, "vbm", side_effect=SystemExit("boom")), mock.patch.object(snp, "venv"), \
+    with mock.patch.object(snp, "vbm", side_effect=SystemExit("boom")), mock.patch.object(snp, "venv"), mock.patch.object(snp, "prepare_state"), mock.patch.object(snp, "check_vm_isolation"), \
             mock.patch.object(snp, "proxy_up", return_value=True), mock.patch.object(snp, "load_env", return_value={"SANDBOX_OAUTH_TOKEN": "x"}), \
             mock.patch.object(snp, "vm_state", return_value="poweroff"), mock.patch("subprocess.run"):
         exits(snp.up, "boom")  # other errors are not retried
@@ -56,20 +56,23 @@ def test_start_retries_while_locked():
 def test_dry_run_writes_nothing():
     with tempfile.TemporaryDirectory() as d, mock.patch.object(snp, "STATE", Path(d) / ".snp"), mock.patch.object(snp, "DRY", True), \
             mock.patch.object(snp, "vbm", return_value=""), mock.patch.object(snp, "network", return_value="vboxnet0"), \
-            mock.patch.object(snp, "find_iso", return_value=Path("x.iso")), mock.patch("builtins.print"):
+            mock.patch.object(snp, "find_iso", return_value=Path("x.iso")), \
+            mock.patch.object(snp.platform, "machine", return_value="AMD64"), mock.patch("builtins.print"):
         snp.setup(mock.Mock(iso=None, ram=4096, cpus=2, password='dev', baseline=False))
         assert not (Path(d) / ".snp").exists()  # no password, key or venv in a dry run
 
 
 def test_setup_refuses_existing_vm():
-    with mock.patch.object(snp, "vbm", return_value=f'"{snp.VM}" {{uuid}}\n'):
+    with mock.patch.object(snp, "vbm", return_value=f'"{snp.VM}" {{uuid}}\n'), \
+            mock.patch.object(snp.platform, "machine", return_value="AMD64"):
         exits(lambda: snp.setup(mock.Mock(iso=None, ram=4096, cpus=2, password='dev', baseline=False)), "already exists")
 
 
 def test_network_finds_adapter_by_address():
     listing = ("Name:            vboxnet1\nIPAddress:       10.0.0.1\n\n"
-               "Name:            VirtualBox Host-Only Ethernet Adapter\nIPAddress:       192.168.56.1\n")
-    with mock.patch.object(snp, "vbm", side_effect=lambda *a, **kw: listing if a[:2] == ("list", "hostonlyifs") else snp.HOST_IP + " HostInterfaceNetworking-x"):
+               "Name:            VirtualBox Host-Only Ethernet Adapter\nIPAddress:       192.168.56.1\nNetworkMask:     255.255.255.0\n")
+    dhcp = "NetworkName: HostInterfaceNetworking-VirtualBox Host-Only Ethernet Adapter\nEnabled: Yes\n"
+    with mock.patch.object(snp, "vbm", side_effect=lambda *a, **kw: listing if a[:2] == ("list", "hostonlyifs") else dhcp):
         assert snp.network() == "VirtualBox Host-Only Ethernet Adapter"
 
 

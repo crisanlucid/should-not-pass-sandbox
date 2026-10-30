@@ -1,0 +1,42 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-tests:
+    name: ${{ matrix.os }} / Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ['3.12', '3.13']
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install test dependencies
+        run: python -m pip install mitmproxy psutil
+      - name: Run offline tests
+        shell: bash
+        run: |
+          python test_snp.py
+          python test_windows_snp.py
+          python test_proxy_lifecycle.py
+          python test_proxy_logging.py
+          python test_trusted_ca.py
+          python test_egress_rules.py
+          python test_credential_swap.py
+          python test_firewall.py
+          python test_netinfo.py
+          python test_platforms.py
+      - name: Check Python syntax
+        run: python -m compileall -q snp.py firewall.py windows_host.py netinfo.py egress_rules.py proxy_addon.py leak_report.py
