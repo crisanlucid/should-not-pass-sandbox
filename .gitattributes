@@ -1,0 +1,5 @@
+# Guest scripts must work after a Windows checkout with core.autocrlf enabled.
+*.sh text eol=lf
+*.py text eol=lf
+*.yml text eol=lf
+*.md text

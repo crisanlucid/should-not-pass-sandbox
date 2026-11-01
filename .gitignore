@@ -10,3 +10,5 @@ __pycache__/
 .snp/
 backlog_constrains.md
 constraints-report.md
+work/
+.pytest_cache/

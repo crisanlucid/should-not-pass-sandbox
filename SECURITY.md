@@ -12,7 +12,7 @@ ShouldNotPass exists to contain hostile code, so reports of a way out are the mo
 ## Known and accepted (not a report)
 - In open mode, the VM can send data to any public site.
 - `dev` is in the `docker` group and has passwordless sudo: that is root inside the VM, by design.
-- macOS, Windows and Apple Silicon are untested.
+- macOS has not had a live VM test. Linux and Windows have live validation; the offline CI matrix includes Linux, Windows and macOS. ARM hosts are unsupported.
 - A VirtualBox escape is a VirtualBox bug: report it to Oracle. If it works because of how this project configures the VM, report it here too.
 
 ## How to report
