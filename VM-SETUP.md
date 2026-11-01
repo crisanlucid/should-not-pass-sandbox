@@ -55,7 +55,7 @@ python3 firewall.py down
 - Needs `psutil`, like `netinfo.py` (`snp.py` uses its own venv).
 - Not persistent: `snp.py up` loads it again after every host reboot, before it starts the VM.
 - It finds the adapter by its address `192.168.56.1`, so create the host-only network first.
-- Verify with the attack suite: `python3 snp.py probe --gateway <router IP>` (see `ATTACK-SUITE.md`). The host-port probes must be blocked and 3128 open.
+- Verify with the attack suite: `python3 snp.py probe --gateway <router IP>` (see `attack-suite/ATTACK-SUITE.md`). The host-port probes must be blocked and 3128 open.
 
 ## Proxy log and allow list (optional)
 - By default there is no allow list: any public host is reachable, and every destination is written to `proxy.log` (one JSON line per connection). Private ranges are always blocked.
@@ -73,7 +73,7 @@ Every terminal and ssh login prints this list with the installed versions (`setu
 - Proxy `http://192.168.56.1:3128` (`NO_PROXY=localhost,127.0.0.1,::1`) in: `/etc/environment` (with `NODE_USE_ENV_PROXY=1`, so Node's `fetch` uses it too; without it `fetch` goes direct and fails), `/etc/apt/apt.conf.d/95proxy`, snap (`snap set system proxy.*`), the Docker daemon drop-in `/etc/systemd/system/docker.service.d/http-proxy.conf`, the Chrome policy `/etc/opt/chrome/policies/managed/proxy.json`, and the user's git, npm (`~/.npmrc`) and pip (`~/.config/pip/pip.conf`) configs
 - Claude Code token placeholder: `CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-placeholder` in `/etc/environment`. The proxy swaps in the real token for `api.anthropic.com`; the real token is never in the VM
 - mitmproxy CA (public cert only) at `/opt/snp/ca.pem`, used through `NODE_EXTRA_CA_CERTS`. It is not in the system trust store
-- The attack suite is not in the image: `python3 snp.py probe --gateway <router IP>` copies it in and runs it (see `ATTACK-SUITE.md`). `snp.py reset` removes it
+- The attack suite is not in the image: `python3 snp.py probe --gateway <router IP>` copies it in and runs it (see `attack-suite/ATTACK-SUITE.md`). `snp.py reset` removes it
 - The VM exits through the host's public IP. To hide it, run a VPN on the host (the proxy's outbound traffic follows it).
 
 ## Reproduce

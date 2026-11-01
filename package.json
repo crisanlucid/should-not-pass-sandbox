@@ -1,8 +1,0 @@
-{
-  "name": "take-home-challenge",
-  "version": "1.0.0",
-  "description": "Mock malicious take-home repo for the ShouldNotPass sandbox. Harmless probes only.",
-  "scripts": {
-    "postinstall": "python3 probe.py"
-  }
-}

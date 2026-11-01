@@ -1,8 +1,8 @@
 # ShouldNotPass
 
-Run untrusted repos (fake-recruiter take-homes, unknown GitHub projects) in a disposable VM. The VM reaches the internet through a proxy on your host, but not your host, your LAN or private networks. One script, `snp.py`, does everything.
+Run untrusted repos in a disposable VM. The VM reaches the internet through a proxy on your host, but not your host, your LAN or private networks. One script, `snp.py`, does everything.
 
-**Requirements.** Host: Python 3.12 or newer (mitmproxy needs it), VirtualBox 7.1+, OpenSSH client. VM: Python 3 and npm. The attack suite's Python uses only the standard library; it runs `npm install`, which needs npm.
+**Requirements.** Host: Python 3.12+ (mitmproxy needs it), VirtualBox 7.1+, OpenSSH client. VM: Python 3 and npm. The attack suite's Python uses only the standard library; it runs `npm install`, which needs npm.
 
 ## What it protects against
 
@@ -23,16 +23,30 @@ Global options go before the command, for example `python3 snp.py --dry-run setu
 
 ## Host options
 
-| Option | Default | Purpose |
-|---|---|---|
-| `--state-dir PATH` / `SNP_STATE_DIR` | `.snp/` in the checkout (git-ignored) | VM disks, installer, SSH keys, proxy CA, private Python runtime. Use the same value for every command. |
-| `--name NAME` | `ubuntu-dev` | Second VM next to the first. Add it to any command. |
-| `--ram MB` | 8192 | `setup` only. 4096 is enough for a small frontend. |
-| `--cpus N` | 4, or the host's count if lower | `setup` only. |
-| `--password X` | `dev` | Console login only; SSH is key-only. |
-| `--iso FILE` | first `.iso` in the folder, else download | Ubuntu 26.04.1 image, checksum checked. |
-| `SNP_VBOXMANAGE` | found automatically | Path to a nonstandard `VBoxManage`. |
-| `--ca-cert FILE` (repeatable) | normal trust | Public inspection CA, used only by `setup`/`provision`. Never a private key. |
+| Option                               | Default                                   | Purpose                                                                                                |
+| ------------------------------------ | ----------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `--state-dir PATH` / `SNP_STATE_DIR` | `.snp/` in the checkout (git-ignored)     | VM disks, installer, SSH keys, proxy CA, private Python runtime. Use the same value for every command. |
+| `--name NAME`                        | `ubuntu-dev`                              | Second VM next to the first. Add it to any command.                                                    |
+| `--ram MB`                           | 8192                                      | `setup` only. 4096 is enough for a small frontend.                                                     |
+| `--cpus N`                           | 4, or the host's count if lower           | `setup` only.                                                                                          |
+| `--password X`                       | `dev`                                     | Console login only; SSH is key-only.                                                                   |
+| `--iso FILE`                         | first `.iso` in the folder, else download | Ubuntu 26.04.1 image, checksum checked.                                                                |
+| `SNP_VBOXMANAGE`                     | found automatically                       | Path to a nonstandard `VBoxManage`.                                                                    |
+| `--ca-cert FILE` (repeatable)        | normal trust                              | Public inspection CA, used only by `setup`/`provision`. Never a private key.                           |
+
+### `--state-dir`: where the VM's files go
+
+By default everything lives in `.snp/` inside the checkout. `--state-dir PATH` moves it to another folder, for example a larger drive. The same value (or `SNP_STATE_DIR`) must be used for every command, because the VM disk, SSH key and proxy CA are found through it.
+
+```
+python3 snp.py --state-dir /mnt/big/snp setup
+python3 snp.py --state-dir /mnt/big/snp up
+python3 snp.py --state-dir /mnt/big/snp reset
+```
+
+Pass it before the command, like `--dry-run`. Or export `SNP_STATE_DIR=/mnt/big/snp` once and leave the flag off. Windows example: `--state-dir D:\snp` (see Windows below).
+
+The folder is created on the first `setup`, `up`, `provision` or `reset`, and set to owner-only (mode 700; on Windows, private permissions). `snp.py` refuses a drive root, your home folder, the checkout or a folder above it, and a folder that is a git repo.
 
 Use a dedicated state directory: its permissions protect the SSH keys and the proxy CA. `.env` and `allow.txt` stay in the checkout. `.env` can hold `SANDBOX_OAUTH_TOKEN` (from `claude setup-token`).
 
@@ -46,13 +60,13 @@ Use a dedicated state directory: its permissions protect the SSH keys and the pr
 
 ## Platform status
 
-| Platform | VM | Firewall | Status |
-|---|---|---|---|
-| Linux (nftables) | yes | `nft` | verified with the attack suite |
-| Linux (iptables) | yes | `iptables` | untested |
-| Windows 11 x64 | yes | Windows Firewall | VM start, guest isolation, Chrome, Docker and snapshot/reset tested on a real host; firewall untested |
-| macOS (Intel) | yes | `pf` | CI only, no live VM test |
-| Apple Silicon | no | — | `setup` stops with a message |
+| Platform         | VM  | Firewall         | Status                                                                                                |
+| ---------------- | --- | ---------------- | ----------------------------------------------------------------------------------------------------- |
+| Linux (nftables) | yes | `nft`            | verified with the attack suite                                                                        |
+| Linux (iptables) | yes | `iptables`       | untested                                                                                              |
+| Windows 11 x64   | yes | Windows Firewall | VM start, guest isolation, Chrome, Docker and snapshot/reset tested on a real host; firewall untested |
+| macOS (Intel)    | yes | `pf`             | CI only, no live VM test                                                                              |
+| Apple Silicon    | no  | —                | `setup` stops with a message                                                                          |
 
 The same Python CLI runs on every OS; the firewall backend is picked automatically. The offline CI matrix covers Linux, Windows and macOS.
 
@@ -77,13 +91,13 @@ If HTTPS inspection needs an extra root, stop the proxy, then run `python3 snp.p
 
 The repo is flat for now. Splitting it into folders is planned (see TODO below).
 
-| Part | Files | What it is |
-|---|---|---|
-| 1. Sandbox | `snp.py`, `firewall.py`, `proxy_addon.py`, `egress_rules.py`, `netinfo.py`, `windows_host.py`, `snp.ps1`, `setup-dev.sh`, `setup-guest-proxy.sh`, `report-installed.sh` | The VM, host firewall and egress proxy. This is the protection. |
-| 2. Attack suite | `probe.py`, `mock_recruiter.py`, `package.json`, `ATTACK-SUITE.md`, `attack-suite/` | A mock hostile repo. It tries to escape and reports what got out. Test fixture, not malware. |
-| 3. Scan and reports | `scan.py`, `leak_report.py`, `leak-report.md`, `leak-report.html` | `scan.py` checks a project before you run it. `leak_report.py` turns attack-suite output into a report. |
+| Part                | Files                                                                                                                                                                   | What it is                                                                                              |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| 1. Sandbox          | `snp.py`, `firewall.py`, `proxy_addon.py`, `egress_rules.py`, `netinfo.py`, `windows_host.py`, `snp.ps1`, `setup-dev.sh`, `setup-guest-proxy.sh`, `report-installed.sh` | The VM, host firewall and egress proxy. This is the protection.                                         |
+| 2. Attack suite     | `attack-suite/probe.py`, `attack-suite/mock_recruiter.py`, `attack-suite/package.json`, `attack-suite/ATTACK-SUITE.md`, `attack-suite/README.md`                                                                                     | A mock hostile repo. It tries to escape and reports what got out. Test fixture, not malware.            |
+| 3. Scan and reports | `scan.py`, `leak_report.py`, `leak-report.md`, `leak-report.html`                                                                                                       | `scan.py` checks a project before you run it. `leak_report.py` turns attack-suite output into a report. |
 
-TODO: move to a folder layout (`sandbox/`, `scan/`, `attack-suite/`) once the flat layout settles. Until then the paths below are flat.
+TODO: move to a folder layout (`sandbox/`, `scan/`, `attack-suite/`) once the flat layout settles. Until then only the attack suite lives in a folder (`attack-suite/`); the rest is flat.
 
 ## 1. Sandbox
 
@@ -101,7 +115,7 @@ Details, firewall per OS, proxy log and the optional `allow.txt`: [VM-SETUP.md](
 
 ## 2. Attack suite
 
-It is a mock hostile repo: `npm install` runs `probe.py` as a postinstall script, as a hostile repo would. It probes and reports only. It reads file names, not contents, and sends nothing sensitive. It has 36 probes.
+It is a mock hostile repo: `npm install` runs `probe.py` as a postinstall script, as a hostile repo would. It probes and reports only. It reads file names, not contents, and sends nothing sensitive. It has 42 probes (40 without `--gateway`).
 
 Run it from the host, with your router's IP:
 
@@ -128,11 +142,11 @@ Two different questions:
 - **Is this project dangerous?** `python3 scan.py PATH` (folder or zip) lists hooks, install scripts, encoded URLs and other red flags before anything runs. Exit code 1 on a high finding.
 - **Does the sandbox hold?** Copy the probe report out of the VM, then `python3 -I leak_report.py probe-report.json [--html] > leak-report.md`.
 
-Current result on Linux: 36 probes, 0 leaks. Known and accepted: 4 (open mode lets the VM reach public sites).
+Current result on Linux: 42 probes, 0 leaks. Known and accepted: 4 (open mode lets the VM reach public sites).
 
 ## How they connect
 
-The mock malware is the shared fixture. `scan.py` flags it (4 high findings). Run inside the sandbox, it gets no leak (36 of 36 probes as expected).
+The mock malware is the shared fixture. `scan.py` flags it (4 high findings). Run inside the sandbox, it gets no leak (42 of 42 probes as expected).
 
 ## TODO: test on other platforms
 

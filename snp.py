@@ -388,7 +388,8 @@ def probe(a):
     ssh, host = guest_ssh()
     gw = f"SNP_GATEWAY={a.gateway} " if a.gateway else ""  # ipaddress-checked, so safe in the shell line
     run(["ssh", *ssh, host, "mkdir -p probe"])
-    run(["scp", *ssh, HERE / "probe.py", HERE / "mock_recruiter.py", HERE / "package.json", f"{host}:probe/"])
+    suite = HERE / "attack-suite"
+    run(["scp", *ssh, suite / "probe.py", suite / "mock_recruiter.py", suite / "package.json", f"{host}:probe/"])
     run(["ssh", *ssh, host, f"cd probe && {gw}SNP_VM=1 npm install"], show=True)
 
 
