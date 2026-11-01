@@ -16,6 +16,7 @@ Untested: `setup` as a whole (written, dry-run only), macOS, Windows, Apple Sili
 """
 import argparse
 import hashlib
+import ipaddress
 import os
 import platform
 import shutil
@@ -162,6 +163,15 @@ def report(_=None):
     ssh, host = guest_ssh()
     run(["scp", *ssh, HERE / "report-installed.sh", f"{host}:"])
     run(["ssh", *ssh, host, "bash report-installed.sh"], show=True)
+
+
+def probe(a):
+    """Copy the attack suite into the running VM and run it. --gateway is your router IP (see README)."""
+    ssh, host = guest_ssh()
+    gw = f"SNP_GATEWAY={a.gateway} " if a.gateway else ""  # ipaddress-checked, so safe in the shell line
+    run(["ssh", *ssh, host, "mkdir -p probe"])
+    run(["scp", *ssh, HERE / "probe.py", HERE / "mock_recruiter.py", HERE / "package.json", f"{host}:probe/"])
+    run(["ssh", *ssh, host, f"cd probe && {gw}SNP_VM=1 npm install"], show=True)
 
 
 def provision(_=None):
@@ -337,9 +347,11 @@ def main():
     s.add_argument("--cpus", type=int, default=min(4, os.cpu_count() or 2))
     for c in ("up", "provision", "report", "snapshot", "down", "reset", "status"):
         sub.add_parser(c)
+    pr = sub.add_parser("probe", help="run the attack suite in the VM")
+    pr.add_argument("--gateway", type=ipaddress.IPv4Address, help="your router IP; without it the router probes are skipped")
     a = p.parse_args()
     DRY, VM = a.dry_run, a.name
-    {"setup": setup, "up": lambda a: up(), "provision": provision, "report": report, "snapshot": snapshot, "down": down, "reset": reset, "status": status}[a.cmd](a)
+    {"setup": setup, "up": lambda a: up(), "provision": provision, "report": report, "snapshot": snapshot, "down": down, "reset": reset, "status": status, "probe": probe}[a.cmd](a)
 
 
 if __name__ == "__main__":

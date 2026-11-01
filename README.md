@@ -9,7 +9,7 @@ Run untrusted repos (fake-recruiter take-homes, unknown GitHub projects) in a di
 | 3. Scan and reports | `scan.py`, `leak_report.py`, `leak-report.md`, `leak-report.html` | `scan.py` checks a project before you run it. `leak_report.py` turns the attack-suite results into a report. |
 
 ```
-snp.py                 single entry point: setup, up, snapshot, reset, down, status, report
+snp.py                 single entry point: setup, up, snapshot, reset, down, status, report, probe
 firewall.py            host firewall per OS (nft/iptables, pf, Windows Firewall)
 proxy_addon.py         mitmproxy addon: egress allow list, private-address refusal, credential swap
 egress_rules.py        allow and deny rules used by proxy_addon.py
@@ -43,8 +43,24 @@ From the host: `python3 snp.py report`.
 
 Details, firewall per OS, proxy log and the optional `allow.txt`: `VM-SETUP.md`.
 
+What the sandbox must do, and what is verified so far: [`constraints.md`](constraints.md).
+
 ## 2. Malware (attack suite)
-Copy `probe.py`, `mock_recruiter.py` and `package.json` into the VM and run `SNP_VM=1 npm install`. It refuses to run elsewhere. Each probe has an expected result; a `FAIL` means the sandbox leaked. `mock_recruiter.py` builds a harmless copy of the real fake-recruiter case (git `post-checkout` hook, base64 `fetch` plus `new Function`).
+Run it from the host, with your router's IP:
+
+```
+python3 snp.py probe --gateway 192.168.1.1
+```
+
+`snp.py probe` copies the probe files into the VM and runs them there. It refuses to run anywhere else.
+
+**Find your router IP** (the default gateway of the host, not the VM, which has no default route):
+
+- Linux: `ip route | grep default`, the address after `via`
+- macOS: `netstat -rn | grep default`, the first address
+- Windows: `ipconfig`, the "Default Gateway" line
+
+You type the address yourself; nothing scans your network. Without `--gateway` the router probes are skipped and the output says so. Each probe has an expected result; a `FAIL` means the sandbox leaked. `mock_recruiter.py` builds a harmless copy of the real fake-recruiter case (git `post-checkout` hook, base64 `fetch` plus `new Function`).
 
 ## 3. Scan and reports
 Two different questions:

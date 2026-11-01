@@ -8,3 +8,5 @@ proxy.log
 probe-report.json
 __pycache__/
 .snp/
+backlog_constrains.md
+constraints-report.md

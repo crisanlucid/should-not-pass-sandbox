@@ -18,6 +18,9 @@ if os.environ.get("SNP_VM") != "1":
 
 HOST = "192.168.56.1"      # host-only address of the host
 PROXY = f"http://{HOST}:3128"
+GATEWAY = os.environ.get("SNP_GATEWAY", "")  # your home router, set by you (see README)
+if not GATEWAY:
+    print("skipped: router probes (set SNP_GATEWAY=<your router IP>)")
 results = []
 
 
@@ -62,11 +65,11 @@ record("host proxy port 3128", "open", tcp(HOST, 3128), "(must stay open)")
 # 2. Direct network access, no proxy
 record("raw tcp to 1.1.1.1:443", "blocked", tcp("1.1.1.1", 443))
 record("http without proxy", "blocked", http("https://example.com", proxy=None))
-for ip in ("169.254.169.254", "192.168.178.1"):
+for ip in ["169.254.169.254"] + ([GATEWAY] if GATEWAY else []):
     record(f"direct {ip}:80", "blocked", tcp(ip, 80))
 
 # 3. Through the proxy: private targets
-for name, url in (("router via proxy", "http://192.168.178.1/"),
+for name, url in ([("router via proxy", f"http://{GATEWAY}/")] if GATEWAY else []) + (
                   ("cloud metadata via proxy", "http://169.254.169.254/latest/meta-data/"),
                   ("NAT gateway via proxy", "http://10.0.2.2/"),
                   ("host localhost via proxy", f"http://127.0.0.1:7070/"),
