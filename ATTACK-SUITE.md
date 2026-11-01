@@ -5,10 +5,11 @@ Looks like a take-home repo; `npm install` runs `probe.py` as a postinstall scri
 **Run it only inside the sandbox VM.** It refuses to run without `SNP_VM=1`, so an accidental run on the host does nothing.
 
 ```
-# on the host: copy it in, then inside the VM
-SNP_VM=1 npm install
-cat probe-report.json
+# on the host, with the VM running: copies the files in and runs them there
+python3 snp.py probe --gateway 192.168.1.1    # your router IP, see README
 ```
+
+The report stays in the VM: `~/probe/probe-report.json`. To read it, `ssh` into the VM and run `cat ~/probe/probe-report.json`, or copy it out with `scp`.
 
 Every probe has an expected result; `FAIL` means the sandbox leaked. Covers: host ports on the host-only address, raw TCP and no-proxy access, router / NAT gateway / metadata / localhost through the proxy, encoded IPs (decimal, hex, octal, short form, IPv6, IPv4-mapped, userinfo trick), hostnames that resolve to 127.0.0.1 (localtest.me, nip.io), other cloud metadata endpoints (GCP, ECS, Alibaba), private and CGNAT ranges, direct IPv6, raw DNS and ICMP as exfil channels, a redirect to metadata, credential files and secrets in the VM, Docker socket, shared folders, and exfiltration to a public site.
 

@@ -11,7 +11,7 @@ python3 snp.py reset        # after each repo: back to `clean`
 
 ## Host
 - Hypervisor: VirtualBox 7.1.18, VM name `ubuntu-dev`
-- Storage: `/mnt/data/sandbox/vms/ubuntu-dev/ubuntu-dev.vdi` (60 GB), on `/dev/nvme0n1p5` (ext4, label `data`, mounted at `/mnt/data`)
+- Storage: 60 GB virtual disk on the host's local disk
 - Resources: 4 CPUs, 8 GB RAM, 128 MB video memory (VMSVGA)
 - Network: host-only `vboxnet0` (`192.168.56.1/24`), no NAT. Guest address `192.168.56.101` (DHCP), no default route. The only way out is the egress proxy on `192.168.56.1:3128`
 - Shared clipboard and drag and drop: disabled. No USB, no shared folders
@@ -55,7 +55,7 @@ python3 firewall.py down
 - Needs `psutil`, like `netinfo.py` (`snp.py` uses its own venv).
 - Not persistent: `snp.py up` loads it again after every host reboot, before it starts the VM.
 - It finds the adapter by its address `192.168.56.1`, so create the host-only network first.
-- Verify from the VM with the attack suite (`probe.py`): the host-port probes must be blocked and 3128 open.
+- Verify with the attack suite: `python3 snp.py probe --gateway <router IP>` (see `ATTACK-SUITE.md`). The host-port probes must be blocked and 3128 open.
 
 ## Proxy log and allow list (optional)
 - By default there is no allow list: any public host is reachable, and every destination is written to `proxy.log` (one JSON line per connection). Private ranges are always blocked.
@@ -67,24 +67,40 @@ Every terminal and ssh login prints this list with the installed versions (`setu
 
 ## Account
 - User `dev`, member of the `docker` group (log out and in for it to apply)
-- This VM (built by hand): the password is `dev`, change it with `passwd`. A VM built by `snp.py setup` gets a random password (in `.snp/password`), key-only SSH and passwordless sudo.
+- Console password: `snp.py setup` uses `dev` unless you pass `--password PW`. Change it with `passwd` after setup, or pass your own. It is stored in `.snp/<vm>/password`. SSH is key-only, and sudo needs no password.
 
 ## Configured for the sandbox (not in `setup-dev.sh`)
 - Proxy `http://192.168.56.1:3128` (`NO_PROXY=localhost,127.0.0.1,::1`) in: `/etc/environment` (with `NODE_USE_ENV_PROXY=1`, so Node's `fetch` uses it too; without it `fetch` goes direct and fails), `/etc/apt/apt.conf.d/95proxy`, snap (`snap set system proxy.*`), the Docker daemon drop-in `/etc/systemd/system/docker.service.d/http-proxy.conf`, the Chrome policy `/etc/opt/chrome/policies/managed/proxy.json`, and the user's git, npm (`~/.npmrc`) and pip (`~/.config/pip/pip.conf`) configs
 - Claude Code token placeholder: `CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-placeholder` in `/etc/environment`. The proxy swaps in the real token for `api.anthropic.com`; the real token is never in the VM
 - mitmproxy CA (public cert only) at `/opt/snp/ca.pem`, used through `NODE_EXTRA_CA_CERTS`. It is not in the system trust store
-- The attack suite is not in the image: copy `probe.py`, `mock_recruiter.py` and `package.json` into the VM when you want to test (`scp probe.py mock_recruiter.py package.json dev@<vm ip>:`), run it, and `snp.py reset` removes it
+- The attack suite is not in the image: `python3 snp.py probe --gateway <router IP>` copies it in and runs it (see `ATTACK-SUITE.md`). `snp.py reset` removes it
 - The VM exits through the host's public IP. To hide it, run a VPN on the host (the proxy's outbound traffic follows it).
 
 ## Reproduce
-`python3 snp.py setup` does it all: host-only network with DHCP, VM (4 GB RAM and 2 CPUs by default, `--ram` and `--cpus` change that), unattended Ubuntu install (over NAT, because the installer needs the mirrors), then the switch to the host-only network, the firewall, the proxy, and `setup-guest-proxy.sh` and `setup-dev.sh` over SSH. It does not take the snapshot: check the VM first, then run `snp.py snapshot`.
 
-By hand, for a VM you built yourself (the VM has no route out, so set the proxy first, then install):
+Automated, one command (long run):
 ```
+python3 snp.py setup        # builds the VM and installs the tools
+python3 snp.py up           # each session: firewall, proxy, VM
+python3 snp.py snapshot     # once the VM is right: save it as `clean`
+```
+
+`setup` runs these steps in order:
+1. Creates the host-only network with DHCP.
+2. Creates the VM with 8 GB RAM (`--ram` overrides). CPUs are 4, or the host's count if lower (`--cpus` overrides). If the host count is unknown, it uses 2.
+3. Installs Ubuntu unattended over NAT, because the installer needs the mirrors.
+4. Switches the VM to host-only, then starts the firewall and proxy.
+5. Runs `setup-guest-proxy.sh` and `setup-dev.sh` over SSH.
+
+`setup` does not take the snapshot. Check the VM, then run `snp.py snapshot`.
+
+Manual, for a VM you built yourself. The VM has no route out, so start the proxy first:
+```
+python3 snp.py up
 scp setup-guest-proxy.sh setup-dev.sh report-installed.sh .snp/mitmproxy/mitmproxy-ca-cert.pem dev@192.168.56.101:
 ssh -t dev@192.168.56.101 'bash setup-guest-proxy.sh mitmproxy-ca-cert.pem && bash setup-dev.sh'
 ```
-The proxy (`snp.py up`) must be running first. To keep the CA an existing VM already trusts: `cp -r ~/.mitmproxy .snp/mitmproxy` before the first `up`.
+To keep a CA an existing VM already trusts, run `cp -r ~/.mitmproxy .snp/mitmproxy` before the first `up`.
 
 ## Not verified
 - `snp.py setup` as a whole: only run with `--dry-run`. Unknown: the VirtualBox post-install hook and the guest additions check on Ubuntu 26.04, the DHCP server and host-only commands on VirtualBox 7.1+ for macOS and Windows.

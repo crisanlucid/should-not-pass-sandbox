@@ -2,6 +2,8 @@
 
 Run untrusted repos (fake-recruiter take-homes, unknown GitHub projects) in a disposable VM that cannot reach your host or your LAN. Three parts:
 
+**Requirements.** Host: Python 3.12 or newer (mitmproxy needs it), VirtualBox 7.1+, OpenSSH client. VM: any Python 3; the attack suite uses only the standard library.
+
 | Part | Files | What it is |
 |---|---|---|
 | 1. Sandbox | `snp.py`, `firewall.py`, `proxy_addon.py`, `egress_rules.py`, `netinfo.py`, `setup-*.sh`, `report-installed.sh` | The VirtualBox VM, the host firewall and the egress proxy. This is the protection. |
@@ -24,7 +26,7 @@ leak_report.py         probe output to leak report (md, --html)
 test_*.py              tests
 ```
 
-TODO: move to the folder layout used in the Antrust repo (`sandbox/`, `scan/`, `attack-suite/`) once the flat layout settles. Paths in the docs below assume flat.
+TODO: move to a folder layout (`sandbox/`, `scan/`, `attack-suite/`) once the flat layout settles. Paths in the docs below assume flat.
 
 ## 1. Sandbox
 The VM has no route out except an HTTP proxy on the host. The host firewall drops everything else from the VM, and the proxy refuses private addresses. Open internet, nothing local. No shared folders, clipboard or USB. `snp.py reset` returns the VM to a clean snapshot after each repo.

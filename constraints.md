@@ -1,4 +1,4 @@
-# Constraints: Antrust sandbox VM
+# Constraints: ShouldNotPass sandbox VM
 
 ## Must have
 1. The VM can reach the internet.

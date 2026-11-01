@@ -1,6 +1,6 @@
 """Mock malicious postinstall: tries what a hostile repo would try, reports pass/FAIL. Harmless: reads names only, sends nothing sensitive.
 
-Run ONLY inside the sandbox VM:  SNP_VM=1 npm install     (or: SNP_VM=1 python3 probe.py)
+Run ONLY inside the sandbox VM. From the host: python3 snp.py probe --gateway <router IP>. Inside the VM: SNP_GATEWAY=<router IP> SNP_VM=1 python3 probe.py
 Each probe has an expected outcome. FAIL = the sandbox leaked.
 """
 import json
