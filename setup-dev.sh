@@ -25,11 +25,24 @@ fi
 curl -fLo /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
 sudo apt install -y /tmp/chrome.deb
 
+# snapd seeds itself on first boot; installing before that finishes fails with "too early for operation"
+sudo snap wait system seed.loaded
+
+# The snap store sits behind round-robin addresses and a single timeout fails the whole run, so retry
+snap_install() {
+  for attempt in 1 2 3 4 5; do
+    sudo snap install "$@" && return 0
+    echo "snap install $* failed (attempt $attempt), retrying" >&2
+    sleep 10
+  done
+  return 1
+}
+
 # Insomnia
-sudo snap install insomnia
+snap_install insomnia
 
 # VS Code
-sudo snap install code --classic
+snap_install code --classic
 
 # Docker (log out and in for the group to apply)
 sudo apt install -y docker.io docker-compose-v2

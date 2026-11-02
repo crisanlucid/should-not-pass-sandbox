@@ -55,7 +55,7 @@ Use a dedicated state directory: its permissions protect the SSH keys and the pr
 - VirtualBox 7.1+, Python 3.12+ with the `venv` module (Ubuntu: `sudo apt install python3-venv`), and the OpenSSH client (`ssh`, `scp`, `ssh-keygen`).
 - Nothing else to install. `snp.py` puts mitmproxy and psutil in `.snp/venv` on the first `setup` or `up`. That needs internet once, for `pip`.
 - About 20 GB free disk (the 60 GB disk file grows as it fills), and 8 GB RAM for the VM.
-- Admin rights: the firewall step asks for your sudo password (Linux, macOS). On Windows, use an elevated terminal.
+- Admin rights: the firewall step asks for your sudo password (Linux, macOS) or shows a UAC prompt (Windows) each time you run `setup`, `provision`, `up` or `reset`. No elevated terminal needed. On Windows the prompt can open minimised in the taskbar.
 - ARM hosts, including Apple Silicon and Windows on ARM, are not supported yet (needs an arm64 Ubuntu image).
 
 ## Platform status
@@ -72,7 +72,14 @@ The same Python CLI runs on every OS; the firewall backend is picked automatical
 
 ### Windows
 
-Install VirtualBox, Python 3.12+ and the Windows OpenSSH Client. Use `py -3` in place of `python3` from an administrator terminal, or the PowerShell launcher:
+Install VirtualBox, Python 3.12+ and the Windows OpenSSH Client. Use `py -3` in place of `python3`; the firewall step shows a UAC prompt by itself, just as it asks for `sudo` on Linux:
+
+```powershell
+py -3 snp.py --state-dir D:\snp setup --ram 4096
+py -3 snp.py --state-dir D:\snp up
+```
+
+Or run the whole script elevated through the optional PowerShell launcher:
 
 ```powershell
 .\snp.ps1 -Elevate --state-dir D:\snp setup --ram 4096
@@ -103,11 +110,11 @@ TODO: move to a folder layout (`sandbox/`, `scan/`, `attack-suite/`) once the fl
 
 Build once with `setup`, run with `up`, reset after each repo with `reset`. The VM has no route out except the HTTP proxy on the host. The host firewall drops everything else from the VM, and the proxy refuses private addresses. No shared folders, clipboard or USB.
 
-`setup` creates the host-only network (`192.168.56.0/24`, DHCP, no NAT) and the VM, then installs Ubuntu unattended. The installer needs the mirrors, so that step uses NAT; after it the VM moves to host-only and loses NAT for good. Expect 30 to 60 minutes. Don't click in the VM window.
+`setup` creates the host-only network (`192.168.56.0/24`, DHCP, no NAT) and the VM, then installs Ubuntu unattended. The installer needs the mirrors, so that step uses NAT; after it the VM moves to host-only and loses NAT for good. Expect 30 to 60 minutes. Don't click in the VM window, run the Ubuntu updater or power the VM off until `setup` ends.
 
 After the Ubuntu install, `setup` loads the firewall (asks for sudo), starts the proxy and installs the tools over SSH: Node, npm, Python, Chrome, VS Code, Insomnia, Docker, Git and Claude Code. The VM is left powered off.
 
-If the tool install fails, fix the cause and run `python3 snp.py provision`. It repeats only the SSH step.
+If the tool install fails, fix the cause and run `python3 snp.py provision`. It repeats the firewall step (another UAC prompt on Windows) and the SSH step. Snap installs are retried because the Snap store can be unreachable at times. Known failures and fixes: [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 
 Inside the VM, each terminal and ssh login prints the installed tools. To see the list again: `vm-versions`. From the host: `python3 snp.py report`.
 

@@ -491,7 +491,7 @@ def up(start_vm=True):
     venv()
     if not DRY:
         check_vm_isolation()
-    # firewall.py prompts for sudo (Linux/macOS); on Windows run this script from an elevated terminal
+    # firewall.py elevates itself: sudo (Linux/macOS) or a UAC prompt (Windows)
     if DRY:
         print("+", exe("python"), HERE / "firewall.py", "up")
     else:
@@ -574,6 +574,20 @@ def status(_=None):
     print(vbm("snapshot", VM, "list", ro=True, check=False).strip() or "no snapshots")
 
 
+def reexec(python, args):
+    """Run this script again with the private runtime's Python and end with its exit code.
+
+    Windows cannot replace a process: os.execv starts the new one and the old one exits at once, so the shell
+    prints its prompt while the command is still running, and loses the exit code. Wait for the child there.
+    """
+    if WIN:
+        try:
+            sys.exit(subprocess.run([python, *args]).returncode)
+        except KeyboardInterrupt:  # Ctrl+C reaches the child too; do not add a traceback to its message
+            sys.exit(130)
+    os.execv(python, [python, *args])
+
+
 def main():
     global DRY, VM, STATE
     if sys.version_info < (3, 12):  # mitmproxy needs 3.12+; fail here, not in pip
@@ -609,7 +623,7 @@ def main():
     # The user only needs stdlib Python; psutil and mitmproxy live in our private runtime.
     if (not DRY and Path(exe("python")).exists()
             and Path(sys.prefix).resolve() != (STATE / "venv").resolve()):
-        os.execv(exe("python"), [exe("python"), str(HERE / "snp.py"), *sys.argv[1:]])
+        reexec(exe("python"), [str(HERE / "snp.py"), *sys.argv[1:]])
     if a.ca_cert:
         if a.cmd not in ("setup", "provision"):
             p.error("--ca-cert applies only to setup or provision")
