@@ -18,7 +18,7 @@ The code for these exists but has never been run. Testers wanted.
 - VirtualBox 7.1 or newer ([downloads](https://www.virtualbox.org/wiki/Downloads)), Python 3.12 or newer with the `venv` module (on Ubuntu: `sudo apt install python3-venv`), the OpenSSH client (`ssh`, `scp`, `ssh-keygen`).
 - Nothing else to install. The proxy (mitmproxy and psutil) is installed by `snp.py` into `.snp/venv` the first time you run `setup` or `up`. It needs internet access once, for `pip`.
 - About 20 GB free disk (the 60 GB disk file grows as it fills), and 8 GB of RAM to give the VM (4 GB works for a small frontend: `--ram 4096`).
-- Admin rights once per start: the firewall step asks for your sudo password (Linux, macOS). On Windows, open an elevated (administrator) terminal first.
+- Admin rights once per start: the firewall step asks for your sudo password (Linux, macOS) or requests UAC consent (Windows). Run the same Python entry point from a normal terminal.
 - ARM hosts, including Apple Silicon and Windows on ARM, are not supported yet (needs an arm64 Ubuntu image).
 - Clone the repo and work from its folder. No absolute paths are needed anywhere.
 
@@ -34,14 +34,17 @@ Defaults stay the same on Linux, macOS and Windows. No OS setting or separate fo
 
 Global options go before the command. For example: `python3 snp.py --state-dir /path/to/state up`. The source checkout, `.env` and `allow.txt` stay where they are. Use a dedicated state directory; its permissions protect SSH keys and the proxy CA.
 
-On Windows, install VirtualBox, Python 3.12+ and the Windows OpenSSH Client. Use `py -3` in place of `python3` from an administrator terminal, or use the optional PowerShell launcher:
+On Windows, install VirtualBox, Python 3.12+ and the Windows OpenSSH Client. Run the same `snp.py` entry point from a normal terminal; the firewall step requests UAC consent automatically:
 
 ```powershell
-.\snp.ps1 -Elevate --state-dir D:\snp setup --ram 4096
-.\snp.ps1 -Elevate --state-dir D:\snp up
+python snp.py --state-dir D:/snp setup --ram 4096
+python snp.py --state-dir D:/snp up
+python snp.py --state-dir D:/snp status
+python snp.py --state-dir D:/snp reset
+python snp.py --state-dir D:/snp down
 ```
 
-Choose an existing drive with at least 30 GB free for the installer and VM. The launcher finds Python and handles UAC; output is saved to `.snp\elevated.log`. If script execution is disabled, invoke `py -3 snp.py ...` directly from an administrator terminal. Guest scripts use LF line endings; Windows does not need Bash.
+Use `python3` instead of `python` where that is the Python 3 command. Choose a drive with at least 30 GB free. Guest scripts use LF line endings; Windows does not need Bash or a separate launcher.
 
 Windows rules apply only to the sandbox adapter and persist until `firewall.py down`; `up` verifies them before starting the VM. Keep Windows Firewall enabled. The setup refuses incompatible forwarding, bridging, sharing and firewall policy.
 

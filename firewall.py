@@ -4,16 +4,19 @@
   python3 firewall.py up|down|status [--dry-run]
 
 Uses the firewall tool of this OS: nft or iptables (Linux), pf (macOS), Windows Firewall (PowerShell).
-Needs admin: re-runs itself with sudo on Linux/macOS, asks for an elevated terminal on Windows.
+Needs admin: re-runs itself with sudo on Linux/macOS, and through a UAC prompt on Windows.
 Run `up` again before starting the VM. Windows rules persist until `down`; the other backends are not saved across reboots.
 Windows requires Windows PowerShell and the built-in NetSecurity/NetTCPIP modules.
 """
+import contextlib
 import json
 import os
 import platform
 import shutil
 import subprocess
 import sys
+import tempfile
+import time
 
 from windows_host import powershell, powershell_file, windows_env
 
@@ -216,8 +219,108 @@ def windows(IF, action):
         sys.exit("Windows PowerShell exited without verifying the sandbox firewall; the VM must remain stopped")
 
 
+ELEVATED_LOG = "--elevated-log="  # internal: set only by the Windows self-elevation below
+
+
+def is_admin():
+    import ctypes
+    return bool(ctypes.windll.shell32.IsUserAnAdmin())
+
+
+WAIT_TIMEOUT = 0x102  # WaitForSingleObject result: the process is still running
+
+
+def wait_with_progress(wait, say=print, clock=time.monotonic, interval_ms=15000):
+    """Block until `wait(ms)` stops timing out, saying every interval that the elevated step is alive.
+
+    The elevated child runs in a hidden window and its output is only read when it ends, so without this the
+    terminal stays silent for the minute or two the firewall rules take.
+    """
+    start = clock()
+    say("Approved. Applying the firewall rules, this usually takes 1 to 3 minutes ...", flush=True)
+    while wait(interval_ms) == WAIT_TIMEOUT:
+        say(f"  still working ... {int(clock() - start)} s", flush=True)
+
+
+def run_elevated(executable, params, cwd):
+    """Windows `sudo`: ShellExecuteEx with the "runas" verb shows the UAC prompt, then waits for the child.
+
+    Returns the child's exit code, or None if the user declined the prompt.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    class ShellExecuteInfo(ctypes.Structure):
+        _fields_ = [("cbSize", wintypes.DWORD), ("fMask", wintypes.ULONG), ("hwnd", wintypes.HWND),
+                    ("lpVerb", wintypes.LPCWSTR), ("lpFile", wintypes.LPCWSTR), ("lpParameters", wintypes.LPCWSTR),
+                    ("lpDirectory", wintypes.LPCWSTR), ("nShow", ctypes.c_int), ("hInstApp", wintypes.HINSTANCE),
+                    ("lpIDList", ctypes.c_void_p), ("lpClass", wintypes.LPCWSTR), ("hkeyClass", wintypes.HKEY),
+                    ("dwHotKey", wintypes.DWORD), ("hIconOrMonitor", wintypes.HANDLE), ("hProcess", wintypes.HANDLE)]
+
+    shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    shell32.ShellExecuteExW.argtypes = [ctypes.POINTER(ShellExecuteInfo)]
+    shell32.ShellExecuteExW.restype = wintypes.BOOL
+    kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel32.WaitForSingleObject.restype = wintypes.DWORD
+    kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+
+    SEE_MASK_NOCLOSEPROCESS, SEE_MASK_NOASYNC, SW_HIDE, ERROR_CANCELLED = 0x40, 0x100, 0, 1223
+    info = ShellExecuteInfo(cbSize=ctypes.sizeof(ShellExecuteInfo), fMask=SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC,
+                            lpVerb="runas", lpFile=executable, lpParameters=params, lpDirectory=cwd, nShow=SW_HIDE)
+    if not shell32.ShellExecuteExW(ctypes.byref(info)):
+        if ctypes.get_last_error() == ERROR_CANCELLED:
+            return None
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        # ShellExecuteEx returns only after the UAC prompt was answered, so the child is running from here on.
+        wait_with_progress(lambda ms: kernel32.WaitForSingleObject(info.hProcess, ms))
+        code = wintypes.DWORD()
+        kernel32.GetExitCodeProcess(info.hProcess, ctypes.byref(code))
+        return code.value
+    finally:
+        kernel32.CloseHandle(info.hProcess)
+
+
+def relaunch_elevated(action):
+    """Re-run this script as administrator (UAC prompt) and relay its output; return its exit code.
+
+    The elevated window is separate, so the child writes its output to a temp log that is printed here.
+    """
+    directory = tempfile.mkdtemp(prefix="snp-elevated-")
+    log = os.path.join(directory, "firewall.log")
+    # Create it here: a file created by the elevated token gets an admin-only ACL this process could not read back.
+    open(log, "w").close()
+    params = subprocess.list2cmdline([os.path.abspath(__file__), action, ELEVATED_LOG + log])
+    print("Windows will ask for Administrator consent to change the sandbox firewall.\n"
+          "Click Yes in the UAC dialog. If you do not see it, look for a flashing icon in the taskbar or press Alt+Tab.", flush=True)
+    try:
+        code = run_elevated(sys.executable, params, os.getcwd())
+        try:
+            with open(log, encoding="utf-8", errors="replace") as f:
+                output = f.read()
+        except OSError as exc:
+            output = f"(could not read the elevated output: {exc})\n"
+    finally:
+        shutil.rmtree(directory, ignore_errors=True)
+    print(output, end="")
+    if code is None:
+        return "administrator consent was declined; the firewall was not changed"
+    return code
+
+
+def apply(action, tool):
+    # Removal/status are group based on Windows, so they still work after an adapter was deleted.
+    IF = interface() if OS != "Windows" or action == "up" else ""
+    print(f"{OS}: using {tool.__name__}, interface {IF or '(all SNP rules)'}")
+    tool(IF, action)
+
+
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    log = next((a[len(ELEVATED_LOG):] for a in sys.argv[1:] if a.startswith(ELEVATED_LOG)), None)
     if len(args) != 1 or args[0] not in ("up", "down", "status"):
         sys.exit(__doc__)
     action = args[0]
@@ -231,15 +334,23 @@ def main():
         sys.exit(f"unsupported OS: {OS}")
     if not DRY:
         if OS == "Windows":
-            import ctypes
-            if not ctypes.windll.shell32.IsUserAnAdmin():
-                sys.exit("run this from an elevated (administrator) terminal")
+            if not is_admin():
+                if log:  # already the elevated child: never prompt again
+                    sys.exit("elevation did not produce an administrator token")
+                sys.exit(relaunch_elevated(action))
         elif os.geteuid() != 0:
             os.execvp("sudo", ["sudo", sys.executable, *sys.argv])
-    # Removal/status are group based on Windows, so they still work after an adapter was deleted.
-    IF = interface() if OS != "Windows" or action == "up" else ""
-    print(f"{OS}: using {tool.__name__}, interface {IF or '(all SNP rules)'}")
-    tool(IF, action)
+    if not (log and OS == "Windows" and not DRY):
+        return apply(action, tool)
+    # Elevated child: its console is hidden, so everything it prints goes to the parent's log file.
+    with open(log, "w", encoding="utf-8", buffering=1) as out, \
+            contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+        try:
+            apply(action, tool)
+        except SystemExit as exc:
+            if exc.code not in (None, 0):
+                print(exc.code)
+                sys.exit(1)
 
 
 if __name__ == "__main__":

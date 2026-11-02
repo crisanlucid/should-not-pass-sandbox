@@ -268,6 +268,8 @@ class PrivateStateTests(unittest.TestCase):
         self.assertIn("SetAccessRuleProtection($true, $false)", script)
         self.assertIn("foreach ($entry in $existing)", script)
         self.assertIn("RemoveAccessRuleSpecific($entry)", script)
+        # Drive roots carry inherited generic rights (GENERIC_ALL) that RemoveAccessRuleSpecific rejects.
+        self.assertLess(script.index("if ($entry.IsInherited) { continue }"), script.index("RemoveAccessRuleSpecific($entry)"))
         self.assertIn("WindowsIdentity]::GetCurrent().User", script)
         self.assertIn("SecurityIdentifier]::new('S-1-5-18')", script)
         self.assertIn("SecurityIdentifier]::new('S-1-5-32-544')", script)
@@ -335,21 +337,37 @@ class RuntimeCommandTests(unittest.TestCase):
         with patch.object(snp.sys, "argv", arguments), patch.object(snp.sys, "prefix", str(self.state.parent)), \
                 patch.object(snp, "prepare_state", side_effect=lambda: events.append("permissions")), \
                 patch.object(snp, "venv", side_effect=install), patch.object(snp, "up") as up, \
-                patch.object(snp.os, "execv", side_effect=SystemExit(77)) as execute, \
+                patch.object(snp.os, "execv") as execv, \
+                patch.object(snp.subprocess, "run", return_value=Mock(returncode=77)) as execute, \
                 self.assertRaises(SystemExit) as error:
             snp.main()
+        # Windows must wait for the child (os.execv would return the prompt early) and pass its exit code on.
         self.assertEqual(error.exception.code, 77)
         self.assertEqual(events, ["permissions", "venv"])
         self.assertEqual(execute.call_args.args,
-                         (str(self.runtime), [str(self.runtime), str(snp.HERE / "snp.py"), *arguments[1:]]))
+                         ([str(self.runtime), str(snp.HERE / "snp.py"), *arguments[1:]],))
+        execv.assert_not_called()
         up.assert_not_called()
+
+    def test_windows_ctrl_c_while_waiting_exits_quietly(self):
+        with patch.object(snp.subprocess, "run", side_effect=KeyboardInterrupt), \
+                self.assertRaises(SystemExit) as error:
+            snp.reexec("python.exe", ["snp.py", "up"])
+        self.assertEqual(error.exception.code, 130)
+
+    def test_posix_replaces_the_process_instead_of_waiting(self):
+        with patch.object(snp, "WIN", False), patch.object(snp.os, "execv") as execv, \
+                patch.object(snp.subprocess, "run") as run:
+            snp.reexec("/venv/bin/python", ["snp.py", "up"])
+        execv.assert_called_once_with("/venv/bin/python", ["/venv/bin/python", "snp.py", "up"])
+        run.assert_not_called()
 
     def test_private_runtime_does_not_reexecute_itself(self):
         self.create_runtime()
         with patch.object(snp.sys, "argv", ["snp.py", "--state-dir", str(self.state), "up"]), \
                 patch.object(snp.sys, "prefix", str(self.state / "venv")), \
                 patch.object(snp, "prepare_state"), patch.object(snp, "venv"), patch.object(snp, "up") as up, \
-                patch.object(snp.os, "execv") as execute:
+                patch.object(snp, "reexec") as execute:
             snp.main()
         execute.assert_not_called()
         up.assert_called_once()
@@ -358,7 +376,7 @@ class RuntimeCommandTests(unittest.TestCase):
         self.create_runtime()
         with patch.object(snp.sys, "argv", ["snp.py", "--state-dir", str(self.state), "--dry-run", "up"]), \
                 patch.object(snp, "prepare_state") as prepare, patch.object(snp, "venv") as venv, \
-                patch.object(snp.os, "execv") as execute, patch.object(snp, "up") as up:
+                patch.object(snp, "reexec") as execute, patch.object(snp, "up") as up:
             snp.main()
             self.assertEqual(snp.STATE, self.state.resolve())
             self.assertTrue(snp.DRY)

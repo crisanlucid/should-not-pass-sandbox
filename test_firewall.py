@@ -192,6 +192,88 @@ class FirewallTests(unittest.TestCase):
                     contextlib.redirect_stdout(io.StringIO()):
                 firewall.main()
 
+    def _windows_main(self, argv, **patches):
+        stack = contextlib.ExitStack()
+        for name, value in {"OS": "Windows", "DRY": False, "windows": mock.Mock(__name__="windows"), **patches}.items():
+            stack.enter_context(mock.patch.object(firewall, name, value))
+        stack.enter_context(mock.patch.object(firewall.sys, "argv", ["firewall.py", *argv]))
+        return stack
+
+    def test_windows_non_admin_relaunches_through_uac_and_relays_output(self):
+        def fake_runas(executable, params, cwd):
+            log = params.split(firewall.ELEVATED_LOG, 1)[1].strip('"')
+            # The parent must create the log before elevating, or the elevated token's ACL would lock it out.
+            self.assertTrue(os.path.exists(log))
+            with open(log, "w", encoding="utf-8") as f:
+                f.write("SNP_FIREWALL_READY\n")
+            self.assertEqual(executable, firewall.sys.executable)
+            self.assertIn("up", params)
+            return 0
+        runas = mock.Mock(side_effect=fake_runas)
+        with self._windows_main(["up"], is_admin=lambda: False, run_elevated=runas), \
+                contextlib.redirect_stdout(io.StringIO()) as out, self.assertRaises(SystemExit) as raised:
+            firewall.main()
+        self.assertEqual(raised.exception.code, 0)
+        runas.assert_called_once()
+        self.assertIn("SNP_FIREWALL_READY", out.getvalue())
+        self.assertFalse(os.path.exists(runas.call_args.args[1].split(firewall.ELEVATED_LOG, 1)[1].strip('"')))
+
+    def test_windows_declined_uac_changes_nothing_and_fails(self):
+        with self._windows_main(["up"], is_admin=lambda: False, run_elevated=lambda *a: None), \
+                contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(SystemExit, "declined"):
+            firewall.main()
+
+    def test_windows_child_exit_code_is_propagated(self):
+        with self._windows_main(["up"], is_admin=lambda: False, run_elevated=lambda *a: 1), \
+                contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as raised:
+            firewall.main()
+        self.assertEqual(raised.exception.code, 1)
+
+    def test_windows_wait_with_progress_reports_until_the_child_ends(self):
+        said, ticks = [], iter([0, 15, 30, 45])
+        results = iter([firewall.WAIT_TIMEOUT, firewall.WAIT_TIMEOUT, 0])
+        firewall.wait_with_progress(lambda ms: next(results), lambda text, **kw: said.append(text),
+                                    clock=lambda: next(ticks), interval_ms=15000)
+        self.assertEqual(len(said), 3)
+        self.assertIn("Approved", said[0])
+        self.assertIn("1 to 3 minutes", said[0])
+        self.assertEqual(said[1:], ["  still working ... 15 s", "  still working ... 30 s"])
+
+    def test_windows_wait_with_progress_is_silent_after_approval_when_the_child_is_quick(self):
+        said = []
+        firewall.wait_with_progress(lambda ms: 0, lambda text, **kw: said.append(text), clock=lambda: 0)
+        self.assertEqual(len(said), 1)
+
+    def test_windows_elevated_child_never_prompts_again(self):
+        runas = mock.Mock()
+        with self._windows_main(["up", firewall.ELEVATED_LOG + "unused.log"], is_admin=lambda: False, run_elevated=runas), \
+                self.assertRaisesRegex(SystemExit, "administrator token"):
+            firewall.main()
+        runas.assert_not_called()
+
+    def test_windows_elevated_child_logs_output_and_errors(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            log = os.path.join(directory, "firewall.log")
+            args = ["up", firewall.ELEVATED_LOG + log]
+            with self._windows_main(args, is_admin=lambda: True, apply=lambda a, t: print("rules loaded")):
+                firewall.main()
+            with open(log, encoding="utf-8") as f:
+                self.assertEqual(f.read(), "rules loaded\n")
+            with self._windows_main(args, is_admin=lambda: True, apply=lambda a, t: firewall.sys.exit("boom")), \
+                    self.assertRaises(SystemExit) as raised:
+                firewall.main()
+            self.assertEqual(raised.exception.code, 1)
+            with open(log, encoding="utf-8") as f:
+                self.assertEqual(f.read(), "boom\n")
+
+    def test_windows_admin_runs_directly_without_elevation(self):
+        runas, apply = mock.Mock(), mock.Mock()
+        with self._windows_main(["status"], is_admin=lambda: True, run_elevated=runas, apply=apply):
+            firewall.main()
+        runas.assert_not_called()
+        apply.assert_called_once()
+
     def test_dry_run_never_invokes_powershell_mutations(self):
         with mock.patch.object(firewall, "DRY", True), mock.patch.object(firewall.subprocess, "run") as run, \
                 contextlib.redirect_stdout(io.StringIO()) as out:

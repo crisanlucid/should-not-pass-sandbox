@@ -66,6 +66,9 @@ if ($acl.AreAccessRulesProtected -and $existing.Count -eq $expected.Count -and -
 }}
 $acl.SetAccessRuleProtection($true, $false)
 foreach ($entry in $existing) {{
+    # Inherited rules are already dropped by the protection call above, and parents such as a drive root
+    # carry generic rights (e.g. GENERIC_ALL) that RemoveAccessRuleSpecific rejects.
+    if ($entry.IsInherited) {{ continue }}
     $acl.RemoveAccessRuleSpecific($entry)
 }}
 foreach ($sid in $identities) {{
