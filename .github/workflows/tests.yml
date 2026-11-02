@@ -39,4 +39,4 @@ jobs:
           python test_netinfo.py
           python test_platforms.py
       - name: Check Python syntax
-        run: python -m compileall -q snp.py firewall.py windows_host.py netinfo.py egress_rules.py proxy_addon.py leak_report.py
+        run: python -m compileall -q snp.py firewall.py windows_host.py netinfo.py egress_rules.py proxy_addon.py proxy_health.py leak_report.py

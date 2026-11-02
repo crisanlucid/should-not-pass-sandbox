@@ -15,6 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from egress_rules import Denied, Rules  # noqa: E402
 from mitmproxy import http  # noqa: E402
+import proxy_health  # noqa: E402
 
 LOG = Path(__file__).resolve().parent / "proxy.log"
 LOG_ONLY = os.environ.get("SANDBOX_MODE") == "log"
@@ -43,6 +44,7 @@ def log(decision, host, why=""):
 class Sandbox:
     def __init__(self):
         self.rules = Rules()
+        self.health_key = os.environ.get("SNP_PROXY_HEALTH_KEY", "")
 
     def _allow_list(self, flow):
         host = flow.request.host
@@ -69,6 +71,14 @@ class Sandbox:
             flow.response.headers["connection"] = "close"
 
     def request(self, flow: http.HTTPFlow):  # plain HTTP, and every redirect target is a new request
+        if flow.request.scheme == "http" and flow.request.host == proxy_health.HOST:
+            challenge = flow.request.path.removeprefix(proxy_health.PATH)
+            valid = (flow.request.method == "GET" and flow.request.path.startswith(proxy_health.PATH)
+                     and proxy_health.TOKEN.fullmatch(challenge) and proxy_health.TOKEN.fullmatch(self.health_key))
+            flow.response = http.Response.make(200 if valid else 404,
+                proxy_health.proof(self.health_key, challenge) if valid else b"",
+                {"Cache-Control": "no-store", "Connection": "close"})
+            return  # handled locally, including malformed requests; never an outbound destination
         self._allow_list(flow)
         if flow.response or flow.request.scheme != "https" or flow.request.pretty_host != CRED_HOST:
             return

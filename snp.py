@@ -21,6 +21,7 @@ import json
 import os
 import platform
 import re
+import secrets
 import shlex
 import shutil
 import socket
@@ -138,9 +139,13 @@ def proxy_entry():
     import psutil
     record = Path(os.environ["SNP_PROXY_PIDFILE"])
     process = psutil.Process(os.getpid())
+    identity = {"pid": process.pid, "created": process.create_time()}
+    if WIN:
+        # Kept in private state and the proxy's environment, never sent over the network.
+        identity["health_key"] = os.environ["SNP_PROXY_HEALTH_KEY"] = secrets.token_hex(32)
     temporary = record.with_name(f"{record.name}.{process.pid}.tmp")
     try:
-        temporary.write_text(json.dumps({"pid": process.pid, "created": process.create_time()}), encoding="utf-8")
+        temporary.write_text(json.dumps(identity), encoding="utf-8")
         temporary.replace(record)
     finally:
         temporary.unlink(missing_ok=True)
@@ -169,12 +174,21 @@ def proxy_process():
 
 
 def proxy_up():
-    """Only the managed proxy's own IPv4 listening socket establishes readiness."""
+    """Verify the managed process and its service, without trusting an open port alone."""
     try:
         import psutil
         process = proxy_process()
         if process is None:
             return False
+        if WIN:
+            # Windows can report NONE for a serving socket. Prove the process is answering instead.
+            record = json.loads((STATE / "proxy.pid").read_text(encoding="utf-8"))
+            if isinstance(record, dict) and "health_key" in record:
+                from proxy_health import check
+                # Bind the proof to the identity we checked, even if the PID file changed meanwhile.
+                return (record["pid"] == process.pid and record["created"] == process.create_time()
+                        and check(HOST_IP, PORT, record["health_key"]))
+        # Unix and older proxy records retain the original exact-listener check.
         return any(connection.family == socket.AF_INET
                    and connection.type == socket.SOCK_STREAM
                    and connection.status == psutil.CONN_LISTEN
@@ -182,7 +196,7 @@ def proxy_up():
                    and connection.laddr.ip == HOST_IP
                    and connection.laddr.port == PORT
                    for connection in process.net_connections(kind="tcp"))
-    except (ImportError, OSError):
+    except (ImportError, OSError, ValueError, KeyError, TypeError):
         return False
     except psutil.Error:
         return False
