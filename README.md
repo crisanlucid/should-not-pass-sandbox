@@ -72,21 +72,14 @@ The same Python CLI runs on every OS; the firewall backend is picked automatical
 
 ### Windows
 
-Install VirtualBox, Python 3.12+ and the Windows OpenSSH Client. Use `py -3` in place of `python3`; the firewall step shows a UAC prompt by itself, just as it asks for `sudo` on Linux:
+Install VirtualBox, Python 3.12+ and the Windows OpenSSH Client. Use `python` or `py -3` in place of `python3`; both work on Windows. The firewall step shows a UAC prompt by itself, just as it asks for `sudo` on Linux:
 
 ```powershell
-py -3 snp.py --state-dir D:\snp setup --ram 4096
-py -3 snp.py --state-dir D:\snp up
+python snp.py --state-dir D:\snp setup --ram 4096
+python snp.py --state-dir D:\snp up
 ```
 
-Or run the whole script elevated through the optional PowerShell launcher:
-
-```powershell
-.\snp.ps1 -Elevate --state-dir D:\snp setup --ram 4096
-.\snp.ps1 -Elevate --state-dir D:\snp up
-```
-
-Pick a drive with at least 30 GB free. The launcher finds Python, handles UAC and saves output to `.snp\elevated.log`. If script execution is disabled, run `py -3 snp.py ...` from an administrator terminal. Guest scripts use LF line endings.
+Pick a drive with at least 30 GB free. `snp.py` shows the UAC prompt itself when the firewall step needs admin rights. Guest scripts use LF line endings.
 
 Windows firewall rules apply only to the sandbox adapter and persist until `firewall.py down`; `up` verifies them before starting the VM. Keep Windows Firewall enabled. Setup refuses incompatible forwarding, bridging, sharing and firewall policy.
 
@@ -100,9 +93,9 @@ The repo is flat for now. Splitting it into folders is planned (see TODO below).
 
 | Part                | Files                                                                                                                                                                   | What it is                                                                                              |
 | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| 1. Sandbox          | `snp.py`, `firewall.py`, `proxy_addon.py`, `egress_rules.py`, `netinfo.py`, `windows_host.py`, `snp.ps1`, `setup-dev.sh`, `setup-guest-proxy.sh`, `report-installed.sh` | The VM, host firewall and egress proxy. This is the protection.                                         |
+| 1. Sandbox          | `snp.py`, `firewall.py`, `proxy_addon.py`, `egress_rules.py`, `netinfo.py`, `windows_host.py`, `setup-dev.sh`, `setup-guest-proxy.sh`, `report-installed.sh` | The VM, host firewall and egress proxy. This is the protection.                                         |
 | 2. Attack suite     | `attack-suite/probe.py`, `attack-suite/mock_recruiter.py`, `attack-suite/package.json`, `attack-suite/ATTACK-SUITE.md`, `attack-suite/README.md`                                                                                     | A mock hostile repo. It tries to escape and reports what got out. Test fixture, not malware.            |
-| 3. Scan and reports | `scan.py`, `leak_report.py`, `leak-report.md`, `leak-report.html`                                                                                                       | `scan.py` checks a project before you run it. `leak_report.py` turns attack-suite output into a report. |
+| 3. Scan and reports | `scan.py`, `leak_report.py`                                                                                                       | `scan.py` checks a project before you run it. `leak_report.py` turns attack-suite output into a report. |
 
 TODO: move to a folder layout (`sandbox/`, `scan/`, `attack-suite/`) once the flat layout settles. Until then only the attack suite lives in a folder (`attack-suite/`); the rest is flat.
 
