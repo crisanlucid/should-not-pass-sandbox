@@ -153,6 +153,10 @@ Current result on Linux: 42 probes, 0 leaks. Known and accepted: 4 (open mode le
 
 ## How they connect
 
+![VM, host and outside: the VM reaches only the host egress proxy; the firewall drops other host traffic; api.anthropic.com gets the token swap](docs/architecture.svg)
+
+The VM reaches the outside only through the host proxy. The host firewall drops all other traffic from the VM, and the proxy refuses private addresses and swaps the Claude token.
+
 The mock malware is the shared fixture. `scan.py` flags it (4 high findings). Run inside the sandbox, it gets no leak (42 of 42 probes as expected).
 
 ## TODO: test on other platforms
