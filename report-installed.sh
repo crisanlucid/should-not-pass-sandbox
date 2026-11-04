@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Lists the tools setup-dev.sh installs, with versions. Runs inside the VM: bash report-installed.sh
+# Lists the tools setup-dev.sh installs, with versions. Installed as `vm-versions` by setup-dev.sh; also: bash report-installed.sh
 export PATH="$HOME/.local/bin:$PATH"
 row() { printf '%-16s %s\n' "$1" "${2:-NOT INSTALLED}"; }
 v() { "$@" 2>/dev/null | head -1; }   # first line of a version command, empty if it fails

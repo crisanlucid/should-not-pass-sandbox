@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" width="1280" height="720" font-family="Arial, Helvetica, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#333"/>
+    </marker>
+    <marker id="arrowRed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#b03a3a"/>
+    </marker>
+  </defs>
+
+  <rect width="1280" height="720" fill="#ffffff"/>
+
+  <!-- Panels -->
+  <rect x="30" y="30" width="380" height="660" rx="12" fill="#fdf6ec" stroke="#c98a2b" stroke-width="3"/>
+  <text x="220" y="70" text-anchor="middle" font-size="24" font-weight="bold" fill="#8a5a12">VM: ubuntu-dev</text>
+  <text x="220" y="96" text-anchor="middle" font-size="18" fill="#555">192.168.56.101</text>
+
+  <rect x="450" y="30" width="400" height="660" rx="12" fill="#f4f8fc" stroke="#4a7fb5" stroke-width="3"/>
+  <text x="650" y="70" text-anchor="middle" font-size="24" font-weight="bold" fill="#2e5f8f">Host</text>
+
+  <rect x="890" y="30" width="360" height="660" rx="12" fill="#f7f7f7" stroke="#888" stroke-width="3"/>
+  <text x="1070" y="70" text-anchor="middle" font-size="24" font-weight="bold" fill="#444">Outside</text>
+
+  <!-- VM nodes -->
+  <rect x="70" y="110" width="300" height="80" rx="10" fill="#ffffff" stroke="#333" stroke-width="2"/>
+  <text x="220" y="158" text-anchor="middle" font-size="22">Untrusted repo</text>
+
+  <rect x="70" y="260" width="300" height="110" rx="10" fill="#ffffff" stroke="#333" stroke-width="2"/>
+  <text x="220" y="305" text-anchor="middle" font-size="22">Node, Python, Docker,</text>
+  <text x="220" y="337" text-anchor="middle" font-size="22">Chrome, Claude Code</text>
+
+  <rect x="70" y="460" width="300" height="80" rx="10" fill="#ffffff" stroke="#333" stroke-width="2"/>
+  <text x="220" y="508" text-anchor="middle" font-size="20">Placeholder token only</text>
+
+  <!-- Host nodes -->
+  <rect x="490" y="260" width="320" height="110" rx="10" fill="#ffffff" stroke="#333" stroke-width="2"/>
+  <text x="650" y="305" text-anchor="middle" font-size="22" font-weight="bold">firewall.py</text>
+  <text x="650" y="337" text-anchor="middle" font-size="18">drops VM traffic to host ports</text>
+
+  <rect x="490" y="420" width="320" height="110" rx="10" fill="#ffffff" stroke="#333" stroke-width="2"/>
+  <text x="650" y="458" text-anchor="middle" font-size="22" font-weight="bold">Egress proxy :3128</text>
+  <text x="650" y="488" text-anchor="middle" font-size="18">proxy_addon.py</text>
+  <text x="650" y="514" text-anchor="middle" font-size="18" fill="#555">allow.txt optional</text>
+
+  <rect x="490" y="570" width="320" height="60" rx="10" fill="#ffffff" stroke="#333" stroke-width="2"/>
+  <text x="650" y="607" text-anchor="middle" font-size="22">proxy.log</text>
+
+  <!-- Outside nodes -->
+  <rect x="930" y="200" width="280" height="70" rx="10" fill="#eef7ee" stroke="#3a8a3a" stroke-width="2"/>
+  <text x="1070" y="242" text-anchor="middle" font-size="22">Public internet</text>
+
+  <rect x="930" y="340" width="280" height="70" rx="10" fill="#eef7ee" stroke="#3a8a3a" stroke-width="2"/>
+  <text x="1070" y="382" text-anchor="middle" font-size="22">api.anthropic.com</text>
+
+  <rect x="930" y="480" width="280" height="90" rx="10" fill="#fbeeee" stroke="#b03a3a" stroke-width="2"/>
+  <text x="1070" y="520" text-anchor="middle" font-size="20">Host, LAN, private nets</text>
+  <text x="1070" y="550" text-anchor="middle" font-size="18" font-weight="bold" fill="#b03a3a">BLOCKED</text>
+
+  <!-- Edges -->
+  <line x1="220" y1="190" x2="220" y2="260" stroke="#333" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <line x1="370" y1="315" x2="490" y2="315" stroke="#333" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <text x="430" y="300" text-anchor="middle" font-size="16" fill="#444">only route out</text>
+
+  <line x1="370" y1="500" x2="490" y2="475" stroke="#333" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <text x="430" y="478" text-anchor="middle" font-size="16" fill="#444">token swap</text>
+
+  <line x1="650" y1="370" x2="650" y2="420" stroke="#333" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <line x1="650" y1="530" x2="650" y2="570" stroke="#333" stroke-width="2.5" marker-end="url(#arrow)"/>
+
+  <line x1="810" y1="440" x2="930" y2="235" stroke="#333" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <text x="862" y="300" text-anchor="end" font-size="16" fill="#444">public hosts</text>
+
+  <line x1="810" y1="470" x2="930" y2="375" stroke="#333" stroke-width="2.5" marker-end="url(#arrow)"/>
+
+  <line x1="810" y1="500" x2="930" y2="525" stroke="#b03a3a" stroke-width="2.5" stroke-dasharray="7,5" marker-end="url(#arrowRed)"/>
+</svg>

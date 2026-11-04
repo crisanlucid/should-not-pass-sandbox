@@ -22,11 +22,22 @@ LOG_ONLY = os.environ.get("SANDBOX_MODE") == "log"
 OAUTH = os.environ.get("SANDBOX_OAUTH_TOKEN", "")  # from `claude setup-token`, sent as Authorization: Bearer
 APIKEY = os.environ.get("SANDBOX_ANTHROPIC_KEY", "")  # Console key, sent as x-api-key
 CRED_HOST = "api.anthropic.com"
+_LOG_WARNING_SENT = False
 
 
 def log(decision, host, why=""):
-    with LOG.open("a") as f:
-        f.write(json.dumps({"t": time.strftime("%FT%T"), "decision": decision, "host": host, "why": why}) + "\n")
+    global _LOG_WARNING_SENT
+    try:
+        with LOG.open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"t": time.strftime("%FT%T"), "decision": decision, "host": host, "why": why}) + "\n")
+    except OSError as e:
+        # Disk-full/permission errors must never turn a denied connection into an allowed one.
+        if not _LOG_WARNING_SENT:
+            _LOG_WARNING_SENT = True
+            try:
+                print(f"warning: cannot write proxy audit log: {e}", file=sys.stderr)
+            except Exception:
+                pass  # even a broken/closed stderr must not interrupt a security decision
 
 
 class Sandbox:
@@ -40,8 +51,8 @@ class Sandbox:
         if LOG_ONLY:
             log("would-deny", host, "not in allow.txt")
             return
-        log("deny", host, "not in allow.txt")
         flow.response = http.Response.make(403, b"blocked: not in allow list\n")
+        log("deny", host, "not in allow.txt")
 
     def tls_clienthello(self, data):
         # tunnel HTTPS untouched, except the API host when a credential is set: decrypt it to swap the placeholder
@@ -49,6 +60,13 @@ class Sandbox:
 
     def http_connect(self, flow: http.HTTPFlow):
         self._allow_list(flow)
+
+    def responseheaders(self, flow: http.HTTPFlow):
+        # APT pipelines requests that can stall at an upstream keep-alive boundary.
+        # Explicitly ending each plain-HTTP exchange lets it reconnect immediately.
+        if (flow.request.scheme == "http" and flow.request.http_version.startswith("HTTP/1")
+                and flow.request.headers.get("user-agent", "").startswith("Debian APT-HTTP/")):
+            flow.response.headers["connection"] = "close"
 
     def request(self, flow: http.HTTPFlow):  # plain HTTP, and every redirect target is a new request
         self._allow_list(flow)
@@ -70,8 +88,8 @@ class Sandbox:
             data.server.address = (self.rules.resolve(host, port), port)
             log("allow", host, data.server.address[0])
         except Denied as e:
-            log("deny", host, str(e))
             data.server.error = f"blocked: {e}"
+            log("deny", host, str(e))
 
 
 addons = [Sandbox()]

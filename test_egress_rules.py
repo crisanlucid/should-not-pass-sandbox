@@ -4,6 +4,7 @@ import tempfile
 from pathlib import Path
 
 from egress_rules import Denied, Rules
+import netinfo
 
 LAN = lambda: [ip.ip_network(n) for n in ("10.0.0.0/8", "127.0.0.0/8", "169.254.0.0/16", "192.168.0.0/16",
                                           "::1/128", "203.0.113.0/24")]
@@ -37,13 +38,23 @@ def main():
     assert denied(rules(fake("203.0.113.9")), "evil.test")                                   # host's own public-looking LAN
     assert denied(rules(fake("93.184.216.34")), "evil.test") is False
 
+    # Upstream IPv6 connections originate on the host, so guest IPv6 firewall
+    # rules cannot protect against unspecified or IPv4 transition destinations.
+    static = lambda: [ip.ip_network(n) for n in netinfo.STATIC]
+    for address in ("::", "64:ff9b::7f00:1", "64:ff9b::c0a8:1", "64:ff9b:1::a00:1",
+                    "2002:7f00:1::", "2002:c0a8:1::", "2001:0:4136:e378:8000:63bf:3fff:fdd2"):
+        r = Rules(allow_file="/nonexistent", resolver=fake(address), deny_list=static)
+        assert denied(r, "transition.test"), address
+
     import socket                                                                           # odd literals, real resolver
     for h in ("2130706433", "0x7f.1", "127.1", "0177.0.0.1"):
         r = Rules(allow_file="/nonexistent", deny_list=LAN)
         try:
-            assert denied(r, h)
-        except socket.gaierror:
-            pass  # not resolvable on this OS, also fine
+            address = r.resolve(h, 443)
+            # Literal syntax varies by OS; an accepted result must not be loopback.
+            assert not ip.ip_address(address).is_loopback, (h, address)
+        except (Denied, socket.gaierror):
+            pass  # blocked or not resolvable on this OS
 
     assert rules(fake()).host_allowed("anything.com")                                        # no allow.txt entries: open
     r = rules(fake(), "# comment\npypi.org\nnpmjs.org\n")
