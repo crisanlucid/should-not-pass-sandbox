@@ -44,12 +44,12 @@ def test_start_retries_while_locked():
         return ""
     with mock.patch.object(snp, "vbm", vbm), mock.patch.object(snp, "venv"), mock.patch.object(snp, "prepare_state"), mock.patch.object(snp, "check_vm_isolation"), mock.patch.object(snp, "proxy_up", return_value=True), \
             mock.patch.object(snp, "load_env", return_value={"SANDBOX_OAUTH_TOKEN": "x"}), mock.patch.object(snp, "vm_state", return_value="poweroff"), \
-            mock.patch("subprocess.run"), mock.patch("time.sleep"):
+            mock.patch("subprocess.run"), mock.patch("time.sleep"), mock.patch.object(snp, "linux_hostonly_has_address", return_value=True):
         snp.up()
     assert calls.count("startvm") == 3
     with mock.patch.object(snp, "vbm", side_effect=SystemExit("boom")), mock.patch.object(snp, "venv"), mock.patch.object(snp, "prepare_state"), mock.patch.object(snp, "check_vm_isolation"), \
             mock.patch.object(snp, "proxy_up", return_value=True), mock.patch.object(snp, "load_env", return_value={"SANDBOX_OAUTH_TOKEN": "x"}), \
-            mock.patch.object(snp, "vm_state", return_value="poweroff"), mock.patch("subprocess.run"):
+            mock.patch.object(snp, "vm_state", return_value="poweroff"), mock.patch("subprocess.run"), mock.patch.object(snp, "linux_hostonly_has_address", return_value=True):
         exits(snp.up, "boom")  # other errors are not retried
 
 
@@ -113,6 +113,32 @@ def test_env_file():
 def test_old_python_is_refused():
     with mock.patch.object(snp.sys, "version_info", (3, 11, 0)), mock.patch.object(snp.sys, "argv", ["snp.py", "status"]):
         exits(snp.main, "3.12", "python.org")
+
+
+def test_linux_starts_vm_before_firewall():
+    # regression: on Linux vboxnet0 has no address until a VM runs, so firewall.py found no interface
+    events = []
+
+    def vbm(*a, **kw):
+        events.append(a[0])
+        return ""
+
+    def run(cmd, *a, **kw):
+        if "firewall.py" in " ".join(map(str, cmd)):
+            events.append("firewall")
+        return mock.Mock(stdout="")
+    for system in ("Linux", "Windows"):
+        events.clear()
+        with mock.patch.object(snp, "vbm", vbm), mock.patch.object(snp, "venv"), mock.patch.object(snp, "prepare_state"), \
+                mock.patch.object(snp, "check_vm_isolation"), mock.patch.object(snp, "proxy_up", return_value=True), \
+                mock.patch.object(snp, "load_env", return_value={"SANDBOX_OAUTH_TOKEN": "x"}), mock.patch.object(snp, "vm_state", return_value="poweroff"), \
+                mock.patch.object(snp, "linux_hostonly_has_address", side_effect=lambda: "startvm" in events), \
+                mock.patch("platform.system", return_value=system), mock.patch("subprocess.run", side_effect=run), mock.patch("time.sleep"):
+            snp.up()
+        if system == "Linux":
+            assert events[0] == "startvm" and events.index("firewall") > 0, events
+        else:
+            assert events[0] == "firewall", events
 
 
 for name, fn in list(globals().items()):

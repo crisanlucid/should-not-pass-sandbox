@@ -219,6 +219,7 @@ class ProxyOwnershipTests(unittest.TestCase):
                 patch.object(snp, "check_vm_isolation"), patch.object(snp, "load_env", return_value={}), \
                 patch.object(snp, "proxy_up", return_value=False), patch.object(snp, "proxy_process", return_value=None), \
                 patch.object(snp, "port_open", return_value=True), patch.object(snp.subprocess, "run"), \
+                patch.object(snp, "linux_hostonly_has_address", return_value=True), \
                 patch.object(snp.subprocess, "Popen") as start_proxy, patch.object(snp, "vbm") as vbm, \
                 self.assertRaisesRegex(SystemExit, "proxy port is occupied"):
             snp.up()

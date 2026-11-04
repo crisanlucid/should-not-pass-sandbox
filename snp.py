@@ -485,12 +485,21 @@ def stop_vm():
     wait("the VM to power off", lambda: vm_state() == "poweroff", 1)
 
 
+def linux_hostonly_has_address():
+    return HOST_IP in subprocess.run(["ip", "-br", "addr"], capture_output=True, text=True).stdout
+
+
 def up(start_vm=True):
     if not DRY:
         prepare_state()
     venv()
     if not DRY:
         check_vm_isolation()
+    # Linux only: vboxnet0 has no address until a VM uses it, so firewall.py cannot find it. Start the VM first.
+    # Windows keeps its adapter up without a VM, so it is unchanged.
+    if not DRY and start_vm and platform.system() == "Linux" and not linux_hostonly_has_address():
+        vbm_unlocked("startvm", VM, "--type", "gui")
+        wait("the host-only link to get its address", linux_hostonly_has_address, 1)
     # firewall.py elevates itself: sudo (Linux/macOS) or a UAC prompt (Windows)
     if DRY:
         print("+", exe("python"), HERE / "firewall.py", "up")
