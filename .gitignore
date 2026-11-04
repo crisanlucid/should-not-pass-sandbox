@@ -12,3 +12,6 @@ backlog_constrains.md
 constraints-report.md
 work/
 .pytest_cache/
+leak-report.md
+leak-report.html
+leak-report-baseline.md
