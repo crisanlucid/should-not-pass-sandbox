@@ -1,0 +1,5 @@
+backend = "virtualbox"
+url = "https://releases.ubuntu.com/26.04.1/"
+image = "ubuntu-26.04.1-desktop-amd64.iso"
+disk_mb = 61440
+desktop = false

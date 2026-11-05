@@ -2,7 +2,7 @@
 
 Run untrusted repos in a disposable VM. The VM reaches the internet through a proxy on your host, but not your host, your LAN or private networks. One script, `snp.py`, does everything.
 
-**Requirements.** Host: Python 3.12+ (mitmproxy needs it), VirtualBox 7.1+, OpenSSH client. VM: Python 3 and npm. The attack suite's Python uses only the standard library; it runs `npm install`, which needs npm.
+**Requirements.** Host: Python 3.12+ (mitmproxy needs it), VirtualBox 7.1+ (x86_64) or QEMU/HVF (Apple Silicon), OpenSSH client. VM: Python 3 and npm. The attack suite's Python uses only the standard library; it runs `npm install`, which needs npm.
 
 ## What it protects against
 
@@ -52,11 +52,12 @@ Use a dedicated state directory: its permissions protect the SSH keys and the pr
 
 ## Before you start
 
-- VirtualBox 7.1+, Python 3.12+ with the `venv` module (Ubuntu: `sudo apt install python3-venv`), and the OpenSSH client (`ssh`, `scp`, `ssh-keygen`).
+- VirtualBox 7.1+ on x86_64, Python 3.12+ with the `venv` module (Ubuntu: `sudo apt install python3-venv`), and the OpenSSH client (`ssh`, `scp`, `ssh-keygen`).
 - Nothing else to install. `snp.py` puts mitmproxy and psutil in `.snp/venv` on the first `setup` or `up`. That needs internet once, for `pip`.
 - About 20 GB free disk (the 60 GB disk file grows as it fills), and 8 GB RAM for the VM.
 - Admin rights: the firewall step asks for your sudo password (Linux, macOS) or shows a UAC prompt (Windows) each time you run `setup`, `provision`, `up` or `reset`. No elevated terminal needed. On Windows the prompt can open minimised in the taskbar.
-- ARM hosts, including Apple Silicon and Windows on ARM, are not supported yet (needs an arm64 Ubuntu image).
+- **Apple Silicon:** `brew install qemu python`. Setup uses a verified Ubuntu ARM64 cloud image and installs a desktop. Insomnia is skipped because no official Linux ARM64 desktop package was found. Other ARM hosts remain unsupported.
+- The VM profile defaults to your host architecture. Use `--profile macos-arm64|virtualbox-amd64` or `--headless` before the command; Mac setup also accepts `--image FILE`.
 
 ## Platform status
 
@@ -66,9 +67,9 @@ Use a dedicated state directory: its permissions protect the SSH keys and the pr
 | Linux (iptables) | yes | `iptables`       | untested                                                                                              |
 | Windows 11 x64   | yes | Windows Firewall | VM start, guest isolation, Chrome, Docker and snapshot/reset tested on a real host; firewall untested |
 | macOS (Intel)    | yes | `pf`             | CI only, no live VM test                                                                              |
-| Apple Silicon    | no  | —                | `setup` stops with a message                                                                          |
+| Apple Silicon    | yes | restricted QEMU  | QEMU/HVF; setup, desktop/tools, isolation and disk/UEFI reset tested                                    |
 
-The same Python CLI runs on every OS; the firewall backend is picked automatically. The offline CI matrix covers Linux, Windows and macOS.
+The same Python CLI runs on every OS; the VM and firewall backends are picked automatically. The extracted VirtualBox adapter still needs live x86_64 re-testing. The offline CI matrix covers Linux, Windows and macOS.
 
 ### Windows
 
@@ -103,9 +104,11 @@ TODO: move to a folder layout (`sandbox/`, `scan/`, `attack-suite/`) once the fl
 
 Build once with `setup`, run with `up`, reset after each repo with `reset`. The VM has no route out except the HTTP proxy on the host. The host firewall drops everything else from the VM, and the proxy refuses private addresses. No shared folders, clipboard or USB.
 
-`setup` creates the host-only network (`192.168.56.0/24`, DHCP, no NAT) and the VM, then installs Ubuntu unattended. The installer needs the mirrors, so that step uses NAT; after it the VM moves to host-only and loses NAT for good. Expect 30 to 60 minutes. Don't click in the VM window, run the Ubuntu updater or power the VM off until `setup` ends.
+**VirtualBox:** `setup` creates the host-only network (`192.168.56.0/24`, DHCP, no NAT) and the VM, then installs Ubuntu unattended. The installer needs the mirrors, so that step uses NAT; after it the VM moves to host-only and loses NAT for good. Expect 30 to 60 minutes. Don't click in the VM window, run the Ubuntu updater or power the VM off until `setup` ends.
 
-After the Ubuntu install, `setup` loads the firewall (asks for sudo), starts the proxy and installs the tools over SSH: Node, npm, Python, Chrome, VS Code, Insomnia, Docker, Git and Claude Code. The VM is left powered off.
+**Apple Silicon:** QEMU uses restricted guest networking and a loopback proxy; no host firewall is needed. Reset restores both the disk and UEFI state.
+
+After the Ubuntu install, VirtualBox `setup` loads the firewall (asks for sudo), starts the proxy and installs the tools over SSH: Node, npm, Python, Chrome, VS Code, Insomnia, Docker, Git and Claude Code. The VM is left powered off.
 
 If the tool install fails, fix the cause and run `python3 snp.py provision`. It repeats the firewall step (another UAC prompt on Windows) and the SSH step. Snap installs are retried because the Snap store can be unreachable at times. Known failures and fixes: [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 
@@ -159,7 +162,6 @@ The code for these exists but has not been run on the platform. Testers wanted.
 - [ ] **macOS (Intel):** host-only network setup, adapter names, the `pf` firewall in `firewall.py`, `netinfo.py`.
 - [ ] **Linux with iptables** instead of nftables: the iptables path in `firewall.py`.
 - [ ] **Windows 11:** the Windows Firewall rules in `firewall.py`.
-- [ ] **Apple Silicon:** arm64 Ubuntu image support.
 - [ ] **Attack suite gaps:** IPv6, DNS and UDP around the proxy, a proxy-down test, and a check that `reset` removes planted files.
 
 ## Tests

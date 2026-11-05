@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Run inside the Ubuntu VM after install: bash setup-dev.sh
 set -euo pipefail
+ARCH=$(dpkg --print-architecture)
 
 sudo apt update
 sudo apt install -y nodejs npm python3 python3-pip python3-venv curl git
@@ -21,12 +22,18 @@ if [ -d /opt/snp/host-ca ]; then
   done
 fi
 
+# Cloud images need a desktop; the VirtualBox ISO already includes it.
+if [ "${SNP_DESKTOP:-0}" = 1 ]; then
+  sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ubuntu-desktop-minimal
+  sudo systemctl set-default graphical.target
+fi
+
 # Chrome
-curl -fLo /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+curl -fLo /tmp/chrome.deb "https://dl.google.com/linux/direct/google-chrome-stable_current_${ARCH}.deb"
 sudo apt install -y /tmp/chrome.deb
 
 # snapd seeds itself on first boot; installing before that finishes fails with "too early for operation"
-sudo snap wait system seed.loaded
+if command -v snap >/dev/null; then sudo snap wait system seed.loaded; fi
 
 # The snap store sits behind round-robin addresses and a single timeout fails the whole run, so retry
 snap_install() {
@@ -39,10 +46,20 @@ snap_install() {
 }
 
 # Insomnia
-snap_install insomnia
+if [ "$ARCH" = arm64 ]; then
+  echo "Insomnia: skipped (no official Linux ARM64 desktop package)."
+else
+  snap_install insomnia
+fi
 
 # VS Code
-snap_install code --classic
+if [ "$ARCH" = arm64 ]; then
+  curl -fLo /tmp/code.deb https://update.code.visualstudio.com/latest/linux-deb-arm64/stable
+  echo 'code code/add-microsoft-repo boolean true' | sudo debconf-set-selections
+  sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y /tmp/code.deb
+else
+  snap_install code --classic
+fi
 
 # Docker (log out and in for the group to apply)
 sudo apt install -y docker.io docker-compose-v2
